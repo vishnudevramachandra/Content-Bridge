@@ -1,0 +1,38 @@
+# --- Secrets / local env ---
+.env
+.env.*
+!.env.example
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Node (Strapi, agents, tooling) ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# --- Python (agents) ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# --- Strapi build/runtime artifacts ---
+strapi/**/.tmp/
+strapi/**/.cache/
+strapi/**/build/
+strapi/**/dist/
+strapi/**/exports/
+
+# --- WordPress runtime (we manage content via DB/volumes, not by committing wp-content) ---
+wordpress/wp-content/uploads/
+
+# --- Logs ---
+*.log
+logs/
