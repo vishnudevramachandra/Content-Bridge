@@ -32,6 +32,9 @@ services:
       WORDPRESS_DB_PASSWORD: ${WORDPRESS_DB_PASSWORD}
     volumes:
       - wordpress_data:/var/www/html
+      # Bind-mount our own plugin from the repo so it's live-edited on the host,
+      # while default plugins (Akismet, Hello Dolly) stay in the named volume.
+      - ./wordpress/wp-content/plugins/contentbridge-fields:/var/www/html/wp-content/plugins/contentbridge-fields
 
   # Lightweight DB browser so we can look at raw tables (wp_posts, wp_postmeta, etc.)
   # without needing phpMyAdmin's heavier footprint.
