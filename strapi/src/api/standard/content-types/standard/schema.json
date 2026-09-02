@@ -1,0 +1,33 @@
+{
+  "kind": "collectionType",
+  "collectionName": "standards",
+  "info": {
+    "singularName": "standard",
+    "pluralName": "standards",
+    "displayName": "Standard",
+    "description": "An industry standard a product complies with, e.g. ISO 9001, ANSI B11.1."
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
+    "organization": {
+      "type": "string"
+    },
+    "description": {
+      "type": "text"
+    },
+    "products": {
+      "type": "relation",
+      "relation": "manyToMany",
+      "target": "api::product.product",
+      "mappedBy": "standards"
+    }
+  }
+}
