@@ -1,0 +1,21 @@
+# node_modules is installed fresh inside the image (see Dockerfile) — the
+# host's copy may contain macOS-compiled native bindings (better-sqlite3)
+# that won't run in the Linux container, so it must never be copied in.
+node_modules
+
+# Runtime state: sqlite db file + uploaded media. These live in named
+# volumes at runtime, not baked into the image.
+.tmp
+public/uploads/*
+!public/uploads/.gitkeep
+
+# Never bake secrets into an image layer.
+.env
+.env.*
+
+.git
+.cache
+dist
+build
+.strapi
+npm-debug.log*

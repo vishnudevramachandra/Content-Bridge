@@ -76,6 +76,47 @@ services:
       - ./wordpress/wp-content/plugins/contentbridge-fields:/var/www/html/wp-content/plugins/contentbridge-fields
       - ./wordpress/seed:/var/www/html/wp-content/seed
 
+  # The Strapi app itself is fully ours (unlike wordpress/ above, which builds
+  # on the official CMS image) — package.json, src/, config/ are all checked
+  # into strapi/, so this Dockerfile just installs deps and runs it, the same
+  # way you'd run it on a host.
+  strapi:
+    build: ./strapi
+    container_name: contentbridge-strapi
+    restart: unless-stopped
+    ports:
+      - "${STRAPI_PORT}:1337"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 1337
+      APP_KEYS: ${STRAPI_APP_KEYS}
+      API_TOKEN_SALT: ${STRAPI_API_TOKEN_SALT}
+      ADMIN_JWT_SECRET: ${STRAPI_ADMIN_JWT_SECRET}
+      JWT_SECRET: ${STRAPI_JWT_SECRET}
+      TRANSFER_TOKEN_SALT: ${STRAPI_TRANSFER_TOKEN_SALT}
+      ENCRYPTION_KEY: ${STRAPI_ENCRYPTION_KEY}
+      DATABASE_CLIENT: ${STRAPI_DB_CLIENT}
+      DATABASE_FILENAME: ${STRAPI_DB_FILENAME}
+    volumes:
+      # sqlite db file + uploaded media are runtime state, not source —
+      # named volumes, not bind-mounted, so they survive `down`/`up` but
+      # aren't tracked by git (unlike the WordPress content dump, there's no
+      # reproducible-seed step for Strapi yet).
+      - strapi_tmp:/opt/app/.tmp
+      - strapi_uploads:/opt/app/public/uploads
+      # Bind-mount our own content-type schemas + custom code from the repo
+      # so edits on the host are live in the container (still needs a
+      # restart to take effect — same as wordpress-seed vs. wordpress's
+      # plugin bind-mount, this is the "source of truth" half of the app).
+      - ./strapi/src:/opt/app/src
+      - ./strapi/config:/opt/app/config
+      - ./strapi/database:/opt/app/database
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1337/_health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   # Lightweight DB browser so we can look at raw tables (wp_posts, wp_postmeta, etc.)
   # without needing phpMyAdmin's heavier footprint.
   adminer:
@@ -90,3 +131,5 @@ services:
 volumes:
   wordpress_db_data:
   wordpress_data:
+  strapi_tmp:
+  strapi_uploads:
