@@ -1,0 +1,49 @@
+{
+  "certifications": [
+    {
+      "name": "UL Listed",
+      "issuingBody": "Underwriters Laboratories",
+      "description": "Product tested and certified to UL safety standards."
+    }
+  ],
+  "standards": [
+    {
+      "name": "ANSI B11.1",
+      "organization": "ANSI",
+      "description": "Safety Requirements for Machine Tools."
+    }
+  ],
+  "products": [
+    {
+      "legacyId": 104,
+      "name": "Aurora BX54 Fiber Laser Engraver",
+      "sku": "SIS-BX54-ENGR",
+      "price": 4299,
+      "description": "Fiber laser engraving system for marking and cutting metal, plastic, and other hard materials. Rated for continuous shop-floor use.",
+      "certifications": [
+        "UL Listed"
+      ],
+      "standards": [
+        "ANSI B11.1"
+      ]
+    },
+    {
+      "legacyId": 233,
+      "name": "BX54 Fume Extraction Filter Cartridge",
+      "sku": "SIS-BX54-FILTER",
+      "price": 145,
+      "description": "Replacement filter cartridge for the BX54 fume extraction attachment. Captures particulate and odor generated when engraving/burning material.",
+      "certifications": [],
+      "standards": []
+    },
+    {
+      "legacyId": 891,
+      "name": "BX54 Replacement Focus Lens",
+      "sku": "SIS-BX54-LENS",
+      "price": 89,
+      "description": "OEM replacement focus lens for the BX54 fiber laser engraver. Lenses degrade with prolonged use and should be inspected regularly for pitting or haze.",
+      "certifications": [],
+      "standards": []
+    }
+  ]
+}

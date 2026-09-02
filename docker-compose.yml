@@ -100,8 +100,7 @@ services:
     volumes:
       # sqlite db file + uploaded media are runtime state, not source —
       # named volumes, not bind-mounted, so they survive `down`/`up` but
-      # aren't tracked by git (unlike the WordPress content dump, there's no
-      # reproducible-seed step for Strapi yet).
+      # aren't tracked by git.
       - strapi_tmp:/opt/app/.tmp
       - strapi_uploads:/opt/app/public/uploads
       # Bind-mount our own content-type schemas + custom code from the repo
@@ -111,11 +110,51 @@ services:
       - ./strapi/src:/opt/app/src
       - ./strapi/config:/opt/app/config
       - ./strapi/database:/opt/app/database
+      # Seed + dump scripts, mounted here too (not just on strapi-seed) so
+      # `docker compose exec strapi bash seed/dump.sh` works the same way
+      # `docker compose exec wordpress bash wp-content/seed/dump.sh` does.
+      - ./strapi/seed:/opt/app/seed
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:1337/_health"]
       interval: 5s
       timeout: 5s
       retries: 20
+
+  # One-shot: seeds the catalog automatically once Strapi is up, then exits —
+  # same shape as wordpress-seed. A second in-process Strapi instance briefly
+  # sharing the same sqlite file with the already-running `strapi` container
+  # is safe here (verified empirically): both `strapi admin:create-user` and
+  # a raw concurrent write succeeded fine against the live volume as long as
+  # writes are quick and sequential, which is all this does.
+  strapi-seed:
+    build: ./strapi
+    depends_on:
+      strapi:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["bash", "seed/seed.sh"]
+    working_dir: /opt/app
+    environment:
+      APP_KEYS: ${STRAPI_APP_KEYS}
+      API_TOKEN_SALT: ${STRAPI_API_TOKEN_SALT}
+      ADMIN_JWT_SECRET: ${STRAPI_ADMIN_JWT_SECRET}
+      JWT_SECRET: ${STRAPI_JWT_SECRET}
+      TRANSFER_TOKEN_SALT: ${STRAPI_TRANSFER_TOKEN_SALT}
+      ENCRYPTION_KEY: ${STRAPI_ENCRYPTION_KEY}
+      DATABASE_CLIENT: ${STRAPI_DB_CLIENT}
+      DATABASE_FILENAME: ${STRAPI_DB_FILENAME}
+      STRAPI_ADMIN_EMAIL: ${STRAPI_ADMIN_EMAIL}
+      STRAPI_ADMIN_PASSWORD: ${STRAPI_ADMIN_PASSWORD}
+    volumes:
+      - strapi_tmp:/opt/app/.tmp
+      - strapi_uploads:/opt/app/public/uploads
+      - ./strapi/src:/opt/app/src
+      - ./strapi/config:/opt/app/config
+      - ./strapi/database:/opt/app/database
+      # Seed script + catalog data. Bind-mounted (not baked into the image)
+      # so they can be edited/regenerated without a rebuild — same reasoning
+      # as wordpress-seed's ./wordpress/seed mount.
+      - ./strapi/seed:/opt/app/seed
 
   # Lightweight DB browser so we can look at raw tables (wp_posts, wp_postmeta, etc.)
   # without needing phpMyAdmin's heavier footprint.
