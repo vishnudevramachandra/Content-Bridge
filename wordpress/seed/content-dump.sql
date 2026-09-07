@@ -52,7 +52,7 @@ CREATE TABLE `wp_posts` (
   KEY `type_status_date` (`post_type`,`post_status`,`post_date`,`ID`),
   KEY `post_parent` (`post_parent`),
   KEY `post_author` (`post_author`)
-) ENGINE=InnoDB AUTO_INCREMENT=19 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=74 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -76,7 +76,13 @@ INSERT INTO `wp_posts` VALUES
 (15,0,'2026-09-02 08:31:42','2026-09-02 08:31:42','Our UL508A-certified panel shop has completed its transition to the latest edition of the standard. If you spec custom control panels built to UL508A, note the updated short-circuit current rating (SCCR) documentation requirements before your next build order.','UL508A Panel Shop Update: What the Latest Revision Changes for Custom Control Panels','','publish','open','open','','ul508a-panel-shop-update-what-the-latest-revision-changes-for-custom-control-panels','','','2026-09-02 08:31:42','2026-09-02 08:31:42','',0,'http://localhost:8080/ul508a-panel-shop-update-what-the-latest-revision-changes-for-custom-control-panels/',0,'post','',0),
 (16,0,'2026-09-02 08:31:42','2026-09-02 08:31:42','Our team spent the week at IMTS talking with plant engineers and procurement teams. The recurring theme: faster cross-reference lookups for substitute parts when a primary SKU is backordered. More on that in an upcoming post.','On the Floor at IMTS: What Buyers Were Asking About This Year','','publish','open','open','','on-the-floor-at-imts-what-buyers-were-asking-about-this-year','','','2026-09-02 08:31:42','2026-09-02 08:31:42','',0,'http://localhost:8080/on-the-floor-at-imts-what-buyers-were-asking-about-this-year/',0,'post','',0),
 (17,0,'2026-09-02 08:31:42','2026-09-02 08:31:42','<!-- wp:navigation-link {\"label\":\"About Us\",\"type\":\"page\",\"id\":4,\"url\":\"http://localhost:8080/about-us/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-submenu {\"label\":\"Products\",\"type\":\"page\",\"id\":5,\"url\":\"http://localhost:8080/products/\",\"kind\":\"post-type\"} -->\n<!-- wp:navigation-link {\"label\":\"Veridian Safety Switches\",\"type\":\"page\",\"id\":10,\"url\":\"http://localhost:8080/products/veridian-safety-switches/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"Veridian Emergency Stop Devices\",\"type\":\"page\",\"id\":11,\"url\":\"http://localhost:8080/products/veridian-emergency-stop-devices/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"Veridian Safety Light Curtains\",\"type\":\"page\",\"id\":12,\"url\":\"http://localhost:8080/products/veridian-safety-light-curtains/\",\"kind\":\"post-type\"} /-->\n<!-- /wp:navigation-submenu -->\n\n<!-- wp:navigation-link {\"label\":\"Services\",\"type\":\"page\",\"id\":6,\"url\":\"http://localhost:8080/services/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"Training\",\"type\":\"page\",\"id\":7,\"url\":\"http://localhost:8080/training/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"SIS Automation Solutions\",\"type\":\"page\",\"id\":8,\"url\":\"http://localhost:8080/sis-automation-solutions/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"Contact Us\",\"type\":\"page\",\"id\":9,\"url\":\"http://localhost:8080/contact-us/\",\"kind\":\"post-type\"} /-->\n','Navigation','','publish','closed','closed','','navigation','','','2026-09-02 08:31:42','2026-09-02 08:31:42','',0,'http://localhost:8080/navigation/',0,'wp_navigation','',0),
-(18,0,'2026-09-02 08:31:42','2026-09-02 08:31:42','<!-- wp:navigation-link {\"label\":\"About Us\",\"type\":\"page\",\"id\":4,\"url\":\"http://localhost:8080/about-us/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-submenu {\"label\":\"Products\",\"type\":\"page\",\"id\":5,\"url\":\"http://localhost:8080/products/\",\"kind\":\"post-type\"} -->\n<!-- wp:navigation-link {\"label\":\"Veridian Safety Switches\",\"type\":\"page\",\"id\":10,\"url\":\"http://localhost:8080/products/veridian-safety-switches/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"Veridian Emergency Stop Devices\",\"type\":\"page\",\"id\":11,\"url\":\"http://localhost:8080/products/veridian-emergency-stop-devices/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"Veridian Safety Light Curtains\",\"type\":\"page\",\"id\":12,\"url\":\"http://localhost:8080/products/veridian-safety-light-curtains/\",\"kind\":\"post-type\"} /-->\n<!-- /wp:navigation-submenu -->\n\n<!-- wp:navigation-link {\"label\":\"Services\",\"type\":\"page\",\"id\":6,\"url\":\"http://localhost:8080/services/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"Training\",\"type\":\"page\",\"id\":7,\"url\":\"http://localhost:8080/training/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"SIS Automation Solutions\",\"type\":\"page\",\"id\":8,\"url\":\"http://localhost:8080/sis-automation-solutions/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"Contact Us\",\"type\":\"page\",\"id\":9,\"url\":\"http://localhost:8080/contact-us/\",\"kind\":\"post-type\"} /-->\n','Navigation','','inherit','closed','closed','','17-revision-v1','','','2026-09-02 08:31:42','2026-09-02 08:31:42','',17,'http://localhost:8080/?p=18',0,'revision','',0);
+(18,0,'2026-09-02 08:31:42','2026-09-02 08:31:42','<!-- wp:navigation-link {\"label\":\"About Us\",\"type\":\"page\",\"id\":4,\"url\":\"http://localhost:8080/about-us/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-submenu {\"label\":\"Products\",\"type\":\"page\",\"id\":5,\"url\":\"http://localhost:8080/products/\",\"kind\":\"post-type\"} -->\n<!-- wp:navigation-link {\"label\":\"Veridian Safety Switches\",\"type\":\"page\",\"id\":10,\"url\":\"http://localhost:8080/products/veridian-safety-switches/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"Veridian Emergency Stop Devices\",\"type\":\"page\",\"id\":11,\"url\":\"http://localhost:8080/products/veridian-emergency-stop-devices/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"Veridian Safety Light Curtains\",\"type\":\"page\",\"id\":12,\"url\":\"http://localhost:8080/products/veridian-safety-light-curtains/\",\"kind\":\"post-type\"} /-->\n<!-- /wp:navigation-submenu -->\n\n<!-- wp:navigation-link {\"label\":\"Services\",\"type\":\"page\",\"id\":6,\"url\":\"http://localhost:8080/services/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"Training\",\"type\":\"page\",\"id\":7,\"url\":\"http://localhost:8080/training/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"SIS Automation Solutions\",\"type\":\"page\",\"id\":8,\"url\":\"http://localhost:8080/sis-automation-solutions/\",\"kind\":\"post-type\"} /-->\n\n<!-- wp:navigation-link {\"label\":\"Contact Us\",\"type\":\"page\",\"id\":9,\"url\":\"http://localhost:8080/contact-us/\",\"kind\":\"post-type\"} /-->\n','Navigation','','inherit','closed','closed','','17-revision-v1','','','2026-09-02 08:31:42','2026-09-02 08:31:42','',17,'http://localhost:8080/?p=18',0,'revision','',0),
+(19,0,'2026-09-07 13:19:36','2026-09-07 13:19:36','When reordering the replacement lens for your BX54 engraver, our internal reference is part number BX54-FL-02. Contact support for the exact catalog SKU your fabricator\'s paperwork needs.','Reordering the BX54 Focus Lens','','publish','open','open','','reordering-the-bx54-focus-lens','','','2026-09-07 13:19:36','2026-09-07 13:19:36','',0,'http://localhost:8080/reordering-the-bx54-focus-lens/',0,'post','',0),
+(21,0,'2026-09-07 13:48:34','2026-09-07 13:48:34','When a critical safety switch or laser engraver filter cartridge fails, waiting on a slow shipment isn\'t an option. Our just-in-time delivery program keeps top-moving SKUs — Veridian safety switches, BX54 consumables, and other frequently reordered parts — staged for same-day dispatch from our regional warehouse. Talk to your account rep about setting up a standing JIT schedule for your top 20 parts.','Just-In-Time Delivery for MRO Parts: Keeping Your Line Running','','publish','open','open','','just-in-time-delivery-for-mro-parts','','','2026-09-07 13:48:34','2026-09-07 13:48:34','',0,'http://localhost:8080/just-in-time-delivery-for-mro-parts/',0,'post','',0),
+(22,0,'2026-09-07 13:48:34','2026-09-07 13:48:34','Running out of gloves, cutting fluid, or BX54 filter cartridges mid-shift costs more than the part itself — it costs downtime. Our smart vending and inventory management program places locked, tracked dispensing units directly on your shop floor, automatically triggering reorders against your SIS account before a bin ever goes empty.','Vending & Inventory Management for Shop-Floor Consumables','','publish','open','open','','vending-and-inventory-management-for-shop-floor-consumables','','','2026-09-07 13:48:34','2026-09-07 13:48:34','',0,'http://localhost:8080/vending-and-inventory-management-for-shop-floor-consumables/',0,'post','',0),
+(23,0,'2026-09-07 13:48:34','2026-09-07 13:48:34','We\'ve expanded our warehouse to stock gravity and powered conveyor sections, roller assemblies, and transfer components for material handling lines — alongside the Veridian safety switches and light curtains you\'d typically pair with a new conveyor guarding zone. Ask your rep for a line-side safety and material handling bundle quote.','Conveyor & Material Handling Components Now In Stock','','publish','open','open','','conveyor-and-material-handling-components-now-in-stock','','','2026-09-07 13:48:34','2026-09-07 13:48:34','',0,'http://localhost:8080/conveyor-and-material-handling-components-now-in-stock/',0,'post','',0),
+(72,1,'2026-09-07 14:27:14','0000-00-00 00:00:00','','Auto Draft','','auto-draft','open','open','','','','','2026-09-07 14:27:14','0000-00-00 00:00:00','',0,'http://localhost:8080/?p=72',0,'post','',0),
+(73,1,'2026-09-07 14:32:10','2026-09-07 14:32:10','{\"version\": 3, \"isGlobalStylesUserThemeJSON\": true }','Custom Styles','','publish','closed','closed','','wp-global-styles-twentytwentyfive','','','2026-09-07 14:32:10','2026-09-07 14:32:10','',0,'http://localhost:8080/wp-global-styles-twentytwentyfive/',0,'wp_global_styles','',0);
 /*!40000 ALTER TABLE `wp_posts` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -95,7 +101,7 @@ CREATE TABLE `wp_postmeta` (
   PRIMARY KEY (`meta_id`),
   KEY `post_id` (`post_id`),
   KEY `meta_key` (`meta_key`(191))
-) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=217 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -111,7 +117,21 @@ INSERT INTO `wp_postmeta` VALUES
 (6,15,'_pingme','1'),
 (7,15,'_encloseme','1'),
 (8,16,'_pingme','1'),
-(9,16,'_encloseme','1');
+(9,16,'_encloseme','1'),
+(10,19,'_pingme','1'),
+(11,19,'_encloseme','1'),
+(13,21,'_pingme','1'),
+(14,21,'_encloseme','1'),
+(15,22,'_pingme','1'),
+(16,22,'_encloseme','1'),
+(17,23,'_pingme','1'),
+(18,23,'_encloseme','1'),
+(211,21,'_edit_lock','1788791400:1'),
+(212,14,'_edit_lock','1788791595:1'),
+(213,16,'_edit_lock','1788791454:1'),
+(214,15,'_edit_lock','1788791459:1'),
+(215,19,'_edit_lock','1788791463:1'),
+(216,19,'slug','BX54-FL-02');
 /*!40000 ALTER TABLE `wp_postmeta` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -198,7 +218,7 @@ CREATE TABLE `wp_terms` (
   PRIMARY KEY (`term_id`),
   KEY `slug` (`slug`(191)),
   KEY `name` (`name`(191))
-) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -211,7 +231,9 @@ INSERT INTO `wp_terms` VALUES
 (1,'Uncategorized','uncategorized',0),
 (2,'Product Spotlights','product-spotlights',0),
 (3,'Code &amp; Compliance','code-compliance',0),
-(4,'Trade Show Recaps','trade-show-recaps',0);
+(4,'Trade Show Recaps','trade-show-recaps',0),
+(5,'Shop Floor Services','shop-floor-services',0),
+(6,'twentytwentyfive','twentytwentyfive',0);
 /*!40000 ALTER TABLE `wp_terms` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -232,7 +254,7 @@ CREATE TABLE `wp_term_taxonomy` (
   PRIMARY KEY (`term_taxonomy_id`),
   UNIQUE KEY `term_id_taxonomy` (`term_id`,`taxonomy`),
   KEY `taxonomy` (`taxonomy`)
-) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -243,9 +265,11 @@ LOCK TABLES `wp_term_taxonomy` WRITE;
 /*!40000 ALTER TABLE `wp_term_taxonomy` DISABLE KEYS */;
 INSERT INTO `wp_term_taxonomy` VALUES
 (1,1,'category','',0,0),
-(2,2,'category','',0,1),
+(2,2,'category','',0,3),
 (3,3,'category','',0,1),
-(4,4,'category','',0,1);
+(4,4,'category','',0,1),
+(5,5,'category','',0,2),
+(6,6,'wp_theme','',0,1);
 /*!40000 ALTER TABLE `wp_term_taxonomy` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -274,7 +298,12 @@ LOCK TABLES `wp_term_relationships` WRITE;
 INSERT INTO `wp_term_relationships` VALUES
 (14,2,0),
 (15,3,0),
-(16,4,0);
+(16,4,0),
+(19,2,0),
+(21,5,0),
+(22,5,0),
+(23,2,0),
+(73,6,0);
 /*!40000 ALTER TABLE `wp_term_relationships` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -314,4 +343,4 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-09-02  9:05:27
+-- Dump completed on 2026-09-07 14:41:57

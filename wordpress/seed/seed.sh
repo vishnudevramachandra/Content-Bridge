@@ -101,6 +101,14 @@ else
   echo "    (Build content in wp-admin, then run dump.sh to create one.)"
 fi
 
+echo "==> Importing featured images"
+# Third kind of state, alongside the two described up top: real files on
+# disk (wp-content/seed/images/), bundled in the repo and imported fresh
+# every time — never baked into content-dump.sql, because the attachment
+# rows a SQL dump would capture are useless without the underlying files
+# they point to, and those files live outside the DB entirely.
+$WP eval-file wp-content/seed/import-images.php
+
 echo "==> Marking site as seeded"
 $WP option add contentbridge_seeded 1 --autoload=no
 

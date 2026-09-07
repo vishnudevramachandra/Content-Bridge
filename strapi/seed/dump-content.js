@@ -62,7 +62,7 @@ async function dumpStandards(app) {
 async function dumpProducts(app) {
   const entries = await app.documents('api::product.product').findMany({
     status: 'published',
-    populate: ['certifications', 'standards'],
+    populate: ['certifications', 'standards', 'image'],
   });
   return entries
     .slice()
@@ -75,6 +75,13 @@ async function dumpProducts(app) {
       description: fromBlocks(p.description),
       certifications: (p.certifications || []).map((c) => c.name),
       standards: (p.standards || []).map((s) => s.name),
+      // Round-trips the *filename* only (matching how seed-content.js
+      // takes a filename and re-uploads it) — not the uploaded file's id,
+      // hash, or URL, none of which mean anything on a fresh volume. The
+      // actual bytes are never touched by this dump, same as WordPress's
+      // dump.sh: real image content lives in strapi/seed/images/ and is
+      // re-uploaded fresh every seed run, not captured in this JSON dump.
+      ...(p.image ? { image: p.image.name } : {}),
     }));
 }
 

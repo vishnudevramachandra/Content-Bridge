@@ -17,12 +17,14 @@
 
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const { createStrapi, compileStrapi } = require('@strapi/strapi');
 
 const catalogSeed = require('./catalog-seed.json');
 
 const SEEDED_FLAG_KEY = 'contentbridge_catalog_seeded';
+const IMAGES_DIR = path.join(__dirname, 'images');
 
 // Product.description is a `blocks` (rich text) attribute; Certification and
 // Standard descriptions are plain `text`. Keeping the seed file itself as
@@ -68,9 +70,34 @@ async function seedStandards(app) {
   return documentIdByName;
 }
 
+// Uploads a bundled seed image (strapi/seed/images/) via the upload
+// plugin's own service — the same one the admin UI's media library calls
+// — and returns the created file record so its `id` can be assigned
+// directly to a product's `image` relation. Unlike content-dump.sql's WP
+// counterpart, there's no dump-content.js analog for this: media files
+// aren't captured by that export, only re-uploaded fresh here on every
+// seed run (mirrors the WordPress seed.sh image-import step).
+async function uploadImage(app, filename) {
+  const filePath = path.join(IMAGES_DIR, filename);
+  const { size } = fs.statSync(filePath);
+  const [file] = await app.plugin('upload').service('upload').upload({
+    data: {},
+    files: {
+      filepath: filePath,
+      originalFilename: filename,
+      name: filename,
+      type: 'image/png',
+      mimetype: 'image/png',
+      size,
+    },
+  });
+  return file;
+}
+
 async function seedProducts(app, certificationIdByName, standardIdByName) {
   console.log('==> Seeding products');
   for (const product of catalogSeed.products) {
+    const image = product.image ? await uploadImage(app, product.image) : null;
     const doc = await app.documents('api::product.product').create({
       data: {
         name: product.name,
@@ -80,6 +107,7 @@ async function seedProducts(app, certificationIdByName, standardIdByName) {
         description: toBlocks(product.description),
         certifications: (product.certifications || []).map((name) => certificationIdByName[name]),
         standards: (product.standards || []).map((name) => standardIdByName[name]),
+        image: image ? image.id : null,
       },
     });
     await app.documents('api::product.product').publish({ documentId: doc.documentId });

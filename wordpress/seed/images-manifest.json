@@ -1,0 +1,19 @@
+[
+  { "slug": "about-us", "file": "page-4-about-us.png", "title": "About Sentinel Industrial Supply", "alt": "About Sentinel Industrial Supply" },
+  { "slug": "products", "file": "page-5-products.png", "title": "Industrial Safety & Automation Catalog", "alt": "Industrial safety and automation catalog" },
+  { "slug": "services", "file": "page-6-services.png", "title": "Spec Lookup & Compliance Services", "alt": "Spec lookup and compliance services" },
+  { "slug": "training", "file": "page-7-training.png", "title": "Machine Safety Training Programs", "alt": "Machine safety training programs" },
+  { "slug": "sis-automation-solutions", "file": "page-8-automation.png", "title": "SIS Automation Solutions", "alt": "SIS automation solutions" },
+  { "slug": "contact-us", "file": "page-9-contact-us.png", "title": "Contact Sentinel Industrial Supply", "alt": "Contact Sentinel Industrial Supply" },
+  { "slug": "veridian-safety-switches", "file": "page-10-veridian-switches.png", "title": "Veridian Safety Interlock Switches", "alt": "Veridian safety interlock switches" },
+  { "slug": "veridian-emergency-stop-devices", "file": "page-11-veridian-estop.png", "title": "Veridian Emergency Stop Devices", "alt": "Veridian emergency stop devices" },
+  { "slug": "veridian-safety-light-curtains", "file": "page-12-veridian-curtains.png", "title": "Veridian Type 4 Safety Light Curtains", "alt": "Veridian Type 4 safety light curtains" },
+  { "slug": "home", "file": "page-13-home.png", "title": "Sentinel Industrial Supply", "alt": "Sentinel Industrial Supply" },
+  { "slug": "burn-it-with-bx54", "file": "post-14-burn-it-bx54.png", "title": "Burn It With BX54", "alt": "Burn it with BX54" },
+  { "slug": "ul508a-panel-shop-update-what-the-latest-revision-changes-for-custom-control-panels", "file": "post-15-ul508a-update.png", "title": "UL508A Panel Shop Update", "alt": "UL508A panel shop update" },
+  { "slug": "on-the-floor-at-imts-what-buyers-were-asking-about-this-year", "file": "post-16-imts-recap.png", "title": "On the Floor at IMTS", "alt": "On the floor at IMTS" },
+  { "slug": "reordering-the-bx54-focus-lens", "file": "post-19-bx54-lens.png", "title": "Reordering the BX54 Focus Lens", "alt": "Reordering the BX54 focus lens" },
+  { "slug": "just-in-time-delivery-for-mro-parts", "file": "post-21-jit-delivery.png", "title": "Just-In-Time Delivery for MRO Parts", "alt": "Just-in-time delivery for MRO parts" },
+  { "slug": "vending-and-inventory-management-for-shop-floor-consumables", "file": "post-22-vending.png", "title": "Vending & Inventory Management", "alt": "Vending and inventory management for shop-floor consumables" },
+  { "slug": "conveyor-and-material-handling-components-now-in-stock", "file": "post-23-conveyors.png", "title": "Conveyor & Material Handling Components Now In Stock", "alt": "Conveyor and material handling components now in stock" }
+]

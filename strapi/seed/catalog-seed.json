@@ -4,6 +4,11 @@
       "name": "UL Listed",
       "issuingBody": "Underwriters Laboratories",
       "description": "Product tested and certified to UL safety standards."
+    },
+    {
+      "name": "CE Marked",
+      "issuingBody": "European Union (CE Marking Directive)",
+      "description": "Product bears the CE mark, indicating conformity with applicable EU health, safety, and environmental protection legislation."
     }
   ],
   "standards": [
@@ -11,6 +16,11 @@
       "name": "ANSI B11.1",
       "organization": "ANSI",
       "description": "Safety Requirements for Machine Tools."
+    },
+    {
+      "name": "IEC 61496-2",
+      "organization": "IEC",
+      "description": "Safety of machinery — Electro-sensitive protective equipment — particular requirements for equipment using active opto-electronic protective devices (AOPDs), such as safety light curtains."
     }
   ],
   "products": [
@@ -25,7 +35,8 @@
       ],
       "standards": [
         "ANSI B11.1"
-      ]
+      ],
+      "image": "product-104-bx54-engraver.png"
     },
     {
       "legacyId": 233,
@@ -34,7 +45,52 @@
       "price": 145,
       "description": "Replacement filter cartridge for the BX54 fume extraction attachment. Captures particulate and odor generated when engraving/burning material.",
       "certifications": [],
-      "standards": []
+      "standards": [],
+      "image": "product-233-bx54-filter.png"
+    },
+    {
+      "legacyId": 512,
+      "name": "Veridian GL100 Safety Interlock Switch",
+      "sku": "SIS-VER-SW100",
+      "price": 78,
+      "description": "Guard-locking safety interlock switch for hinged and sliding guard doors. Positive-opening contacts and a coded actuator resist defeat, for use on access points where machine energy must be isolated before entry.",
+      "certifications": [
+        "UL Listed",
+        "CE Marked"
+      ],
+      "standards": [
+        "ANSI B11.1"
+      ],
+      "image": "product-512-veridian-switch.png"
+    },
+    {
+      "legacyId": 618,
+      "name": "Veridian ES200 Emergency Stop Pushbutton",
+      "sku": "SIS-VER-ES200",
+      "price": 54,
+      "description": "Panel-mount emergency stop pushbutton with a latching mushroom head and positive-break contacts for machine safety circuits. Also available as a pull-wire e-stop for perimeter guarding of conveyors and long machine lines.",
+      "certifications": [
+        "UL Listed",
+        "CE Marked"
+      ],
+      "standards": [
+        "ANSI B11.1"
+      ],
+      "image": "product-618-veridian-estop.png"
+    },
+    {
+      "legacyId": 734,
+      "name": "Veridian LC900 Type 4 Safety Light Curtain",
+      "sku": "SIS-VER-LC900",
+      "price": 612,
+      "description": "Type 4 safety light curtain for point-of-operation guarding on presses and automated cells. Muting and blanking configurable per zone, with resolution options down to finger detection for close-proximity hazards.",
+      "certifications": [
+        "CE Marked"
+      ],
+      "standards": [
+        "IEC 61496-2"
+      ],
+      "image": "product-734-veridian-curtain.png"
     },
     {
       "legacyId": 891,
@@ -43,7 +99,8 @@
       "price": 89,
       "description": "OEM replacement focus lens for the BX54 fiber laser engraver. Lenses degrade with prolonged use and should be inspected regularly for pitting or haze.",
       "certifications": [],
-      "standards": []
+      "standards": [],
+      "image": "product-891-bx54-lens.png"
     }
   ]
 }
