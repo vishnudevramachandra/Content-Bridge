@@ -1,81 +1,88 @@
-"""Strapi's "known vocabulary," and the heuristic used to spot mentions of
-it inside free-text WordPress content.
+"""Building a Strapi "vocabulary" for body-scan matching — entirely from
+live schema + data, no hardcoded entity names or keyword lists.
 
-This module is deliberately Mapping-only: it hard-codes knowledge of BOTH
-systems (Strapi's catalog entities on one side, WordPress post bodies on
-the other), which is exactly the kind of cross-system knowledge Discovery
-is not allowed to hold.
+This module used to hard-code which words point at which products
+(`"bx54" -> [104, 233, 891]`, etc.) after a human read the seed catalog.
+That's exactly the kind of tailoring the rest of this build is trying to
+avoid: it would silently go stale the moment the catalog changed, and it
+wouldn't work at all against a different Strapi instance. Everything here
+is derived at runtime instead:
 
-Two tiers, matching the task brief:
-
-- `EXACT names`: the literal `name` string of a product/standard/certification.
-  A verbatim (case-insensitive) match in a post body is deterministic —
-  no judgment involved, just string containment.
-- `SIGNATURE_TOKENS`: shorter, looser substrings associated with one or more
-  entities. A hit here means "this post *might* be talking about one of
-  these," not "it definitely is." Some tokens are deliberately coarse
-  (`"BX54"`, `"Veridian"` match a whole product family; `"UL"` matches any
-  UL-flavored standard number, not just our seeded "UL Listed" certification)
-  precisely so that real ambiguity — including genuine non-matches — shows
-  up instead of being quietly designed away. Whether a signature-token hit
-  becomes a real correspondence is exactly the judgment Mapping's LLM step
-  is for.
+- `pick_label_attribute` finds, generically, which attribute of a content
+  type acts as its human-readable name — the thing a WordPress post would
+  plausibly mention in prose. Strapi has an official place for this
+  (content-manager's `settings.mainField`), so that's checked first; this
+  seed doesn't set it, so we fall back to a schema-shape convention
+  (first required string attribute) that's still a generic rule, not a
+  name lookup.
+- `build_entities` turns each content type's real records into `Entity`
+  objects carrying that label, keyed by Strapi's own `documentId` — the one
+  identifier every Strapi content type has, regardless of domain.
+- `build_token_index` tokenizes real labels into single words, so
+  "BX54 Replacement Focus Lens" naturally yields a token index where "bx54"
+  legitimately points at every BX54-family product (because they all
+  really contain that word), not because someone wrote that down.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_MIN_TOKEN_LEN = 4  # filters noise like "the", "for", "ul" without a hardcoded stopword list
 
 
 @dataclass(frozen=True)
 class Entity:
-    content_type: str  # "product" | "standard" | "certification"
-    ref: str  # legacyId (product) or name (standard/certification) as a string
-    name: str
+    content_type: str  # short name, e.g. "product"
+    ref: str            # Strapi documentId — stable, generic across all content types
+    label: str           # the human-readable name used for matching
 
 
-# Populated at runtime from Strapi's actual content-manager data (see
-# mapping.py) rather than hard-coded here — this dict starts empty and is
-# filled once per run so the vocabulary always reflects live seed data.
-def build_entities(products: list[dict], standards: list[dict], certifications: list[dict]) -> list[Entity]:
+def pick_label_attribute(attributes: dict) -> str | None:
+    """Generic heuristic for "which attribute is this content type's name."
+
+    Strapi's own generic answer to this question is content-manager's
+    `settings.mainField`, which we check for first (see mapping.py's caller).
+    This function is the fallback used when that isn't set: the first
+    required string-typed attribute, in schema declaration order. That's a
+    real (if imperfect) convention most Strapi content types follow — not
+    a guess tailored to this catalog's field names.
+    """
+    for name, spec in attributes.items():
+        if spec.get("type") == "string" and spec.get("required"):
+            return name
+    for name, spec in attributes.items():
+        if spec.get("type") == "string":
+            return name
+    return None
+
+
+def build_entities(content_type: str, label_attr: str | None, entries: list[dict]) -> list[Entity]:
+    if label_attr is None:
+        return []
     entities = []
-    for p in products:
-        entities.append(Entity("product", str(p["legacyId"]), p["name"]))
-    for s in standards:
-        entities.append(Entity("standard", s["name"], s["name"]))
-    for c in certifications:
-        entities.append(Entity("certification", c["name"], c["name"]))
+    for entry in entries:
+        label = entry.get(label_attr)
+        if isinstance(label, str) and label:
+            entities.append(Entity(content_type, entry["documentId"], label))
     return entities
 
 
-# token -> list of (content_type, ref) tuples. Refs are legacyId strings for
-# products, names for standards/certifications, resolved against the live
-# `entities` list at match time (see mapping.find_candidates).
-SIGNATURE_TOKENS: dict[str, list[tuple[str, str]]] = {
-    # Coarse family tokens — intentionally ambiguous across multiple products.
-    "bx54": [("product", "104"), ("product", "233"), ("product", "891")],
-    "veridian": [("product", "512"), ("product", "618"), ("product", "734")],
-    # Precise tokens — narrow to a single product.
-    "engraver": [("product", "104")],
-    "laser": [("product", "104")],
-    "filter": [("product", "233")],
-    "cartridge": [("product", "233")],
-    "focus lens": [("product", "891")],
-    "lens": [("product", "891")],
-    "interlock": [("product", "512")],
-    "safety switch": [("product", "512")],
-    "emergency stop": [("product", "618")],
-    "e-stop": [("product", "618")],
-    "estop": [("product", "618")],
-    "pushbutton": [("product", "618")],
-    "light curtain": [("product", "734")],
-    "curtain": [("product", "734")],
-    # Standards / certifications. "UL" is deliberately loose: it fires on
-    # "UL508A" (a real standard number that is *not* in our seed data) just
-    # as readily as on anything actually meaning the "UL Listed" mark — the
-    # whole point being that a token hit is a candidate, not a verdict.
-    "ansi": [("standard", "ANSI B11.1")],
-    "iec": [("standard", "IEC 61496-2")],
-    "ul": [("certification", "UL Listed")],
-    "ce mark": [("certification", "CE Marked")],
-}
+def tokenize(text: str) -> set[str]:
+    return {w for w in _WORD_RE.findall(text.lower()) if len(w) >= _MIN_TOKEN_LEN}
+
+
+def build_token_index(entities: list[Entity]) -> dict[str, list[Entity]]:
+    """token -> every entity whose label contains that token.
+
+    A coarse token like "bx54" ends up pointing at multiple products
+    because multiple real product names really contain it — that
+    ambiguity is discovered from data, not authored by hand.
+    """
+    index: dict[str, list[Entity]] = {}
+    for entity in entities:
+        for token in tokenize(entity.label):
+            index.setdefault(token, []).append(entity)
+    return index
