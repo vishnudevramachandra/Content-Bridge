@@ -36,3 +36,6 @@ wordpress/wp-content/uploads/
 # --- Logs ---
 *.log
 logs/
+
+# --- Mapping rules database ---
+mapping_rules.db
