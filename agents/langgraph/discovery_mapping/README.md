@@ -271,9 +271,9 @@ gains a second, LLM-backed step with three hard constraints:
    a URL-style slug, but observed values across posts are uppercase
    alphanumeric codes with hyphens — inconsistent with a URL/post-name
    pattern, more consistent with a product/part code"* — generated only from
-   WordPress's own data. This gloss feeds into Mapping's existing free-text
-   judgment prompt (§12 tier 2) as additional evidence; Mapping still makes
-   the actual cross-system call.
+   WordPress's own data. This gloss feeds into the residue-tier agent's
+   context (§12) as additional evidence when it reasons over this field;
+   Mapping still makes the actual cross-system call, not Discovery.
 
 **Caching implication (extends §9b, doesn't complicate it):** this is a new
 LLM call site, so it needs the same zero-calls-on-cache-hit guarantee as
@@ -315,6 +315,31 @@ structured match; WP post 19's `meta.slug` free-text escalation) and the
 run-twice/zero-new-LLM-calls cache proof — **but "verified working on the
 demo data" is exactly the property that let most of the bugs below stay
 hidden** (§10 explains why, for all six).
+
+**Escalation redesign, in progress (§12 rewritten; this is the current
+front of work).** The target design changed from a linear
+deterministic→LLM→human cascade to an agentic one: tier 1 stays exhaustive
+and automatic, but everything it can't resolve is now handed, as data, to a
+single reasoning agent with full visibility over the whole unresolved pool
+— see §12 for the full rationale and shape. The first step of that rewrite
+is done and verified: `mapping.py`'s old isolated-LLM-call site
+(`_record_llm_judgment`, Bug 6's mechanism) has been removed entirely and
+replaced with `_resolve_or_defer`, which never calls an LLM — it either
+resolves for free (cache hit, or zero candidates → `no_match_confirmed`) or
+returns the ambiguous case as a `residue` item for the not-yet-built agent
+tier to consume. `resolve_mapping_task` now returns
+`{"resolutions": [...], "residue": [...]}`, and `PipelineState` has a new
+`residue: Annotated[list[dict], operator.add]` key alongside `resolutions`,
+using the same parallel-`Send`-safe reducer. Run against live data
+(`python run.py`), both runs now produce **0 LLM calls**, 26 identical
+resolutions, and 22 identical residue items (post 19's `meta.slug` plus
+every body-scan mention across posts 14/19/21/22/23) — confirming Bug 6's
+old call site is gone, not just moved, and that residue re-derives
+identically across runs (it isn't cached, since nothing in the agent tier
+has resolved it yet). Not yet built: the `agent_step` node itself, its
+tool set, the no-progress termination guard, and the routing edge that
+sends non-empty `residue` there instead of straight to `summarize` — see
+§12's "Not yet implemented" subsection for the exact next steps.
 
 ## 6. Six confirmed bugs in the current `mapping.py` / `vocab.py`
 
@@ -404,28 +429,45 @@ that the same post's body text already resolved, near-unambiguously, to
 candidate 891 — corroboration the pipeline itself already computed, in the
 same run, and then discarded.
 
-*The fix for Bug 6* (not yet implemented; scoped for the rewrite in
-§10/§11): aggregate every ambiguous signal for the same `post_id` — every
-field's `fuzzy_candidates` plus every body-scan token's candidates — into
-one bundle *before* the LLM is ever called, and issue a single LLM judgment
-per post that reasons over all of that post's evidence together, instead of
-one call per field and per token. Concretely: `plan_mapping_tasks` would
-build one `Send("resolve_mapping_task", ...)` payload per post (not per
-field × per token), carrying the full set of `(evidence, candidates)` pairs
-for that post; the prompt would present all of them together (e.g. "this
-post's `meta.slug` is `'BX54-FL-02'`; this post's body also mentions
-`'focus'`, `'lens'`, `'replacement'` → candidate 891, and `'engraver'` →
-candidate 104 — resolve as many of these as you can, and say which ones you
-can't"); the response would still be fanned back out into the same
-per-`source_ref` `mapping_rules` rows that exist today, one row per resolved
-fact — preserving today's field/mention-level *cache* granularity while
-fixing the *call-level* fragmentation. This is a distinct, orthogonal fix
-from Bug 2's (which aggregates the same field *across posts*, not the same
-post *across fields/mentions*) — both are needed, and neither substitutes
-for the other.
+*The fix for Bug 6 — superseded plan, kept on record.* An earlier version of
+this fix (aggregate every ambiguous signal for the same `post_id` into one
+bundle *before* the LLM is ever called, and issue a single forced LLM
+judgment per post) was drafted but never implemented, and has since been
+**superseded by the agentic-residue redesign in §12**, not built as
+described here. That earlier plan still forced a *fixed* aggregation unit
+(one call per post) chosen by the code, not by anything reasoning about
+what's actually relevant — it would have fixed post 19's specific case but
+baked in the same kind of unexamined assumption Bug 2 already shows is
+risky (§10). The design that actually replaced it does something more
+general: instead of forcing an aggregation boundary up front, every
+genuinely ambiguous case (per field, per body-scan token — the same
+granularity as today) becomes a `residue` item with no LLM call attached to
+it at all, and a single agent with full visibility over *all* residue items
+across *all* posts decides for itself, at read time, which ones are
+evidence for the same real-world fact — using tools, not a hardcoded
+`post_id` grouping key. This is strictly more general than "bundle by
+post": it would also connect, say, one post's `meta.slug` to a *different*
+post's body mention if that's ever the actual evidence pattern, which a
+fixed per-post bundle could never do.
 
-All six bugs are real and still in the code as of this writing — none have
-been fixed yet; that's part of what the rewrite in §10 needs to address.
+**Bug 6's status as of this writing**: the isolated-call mechanism itself
+is confirmed gone — `mapping.py`'s `_record_llm_judgment` (the function
+named throughout this bug's description) has been deleted, and running the
+pipeline against live data now shows **0 LLM calls** where post 19 alone
+used to produce 5 (verified in §12's implementation-status subsection).
+What Bug 6 originally complained about — evidence never seeing other
+evidence for the same fact — is not yet demonstrated *fixed*, because the
+agent tier that's supposed to do that cross-evidence reasoning doesn't
+exist yet; today, all 22 ambiguous cases (including post 19's) simply sit
+in `residue`, unresolved by anything. Calling Bug 6 "fixed" is only honest
+once the agent tier is built and shown, against this same post-19 evidence,
+to actually connect `meta.slug` to the body mentions the way the original
+bug report expected.
+
+Bugs 1–5 are real and still in the code as of this writing — none of those
+five have been fixed yet; that's part of what the rewrite in §10 needs to
+address. Bug 6 is the one exception, in the qualified sense described
+above: its mechanism is gone, but the behavior it demanded isn't proven yet.
 
 ## 7. Change A and Change B (agreed, not yet implemented)
 
@@ -714,11 +756,15 @@ These are meant to be checked, not just remembered:
    fixture, and Bug 6 would have been caught by a fixture with two or more
    independent mentions of the same real-world entity on one post — none of
    which anything so far has bothered to write.
-5. **Keep the tiers of the escalation ladder (§12) structurally separate in
-   code, not just conceptually**: deterministic matching should stay simple
-   enough to be obviously correct by inspection; the LLM-judgment tier owns
-   all the cross-post/cross-schema aggregation complexity; human escalation
-   is a distinct, final fallback, not a fallthrough case inside the LLM tier.
+5. **Keep tier 1 and the agent tier (§12) structurally separate in code, not
+   just conceptually**: deterministic matching should stay simple enough to
+   be obviously correct by inspection, and never call an LLM; the agent
+   tier owns all the cross-post/cross-schema aggregation complexity and all
+   human escalation. Human escalation is one of the agent's own tool calls
+   now (§12), not a separate third structural stage — but it must still be
+   distinguishable after the fact via `method`/`resolution_status` (§13),
+   so "the agent decided this itself" and "a human decided this" never
+   collapse into the same unreadable row.
 6. **Rewrite in small, individually-approved steps**: propose one function's
    contract, get a yes, implement it, show its output against real data,
    then move to the next. Don't batch several redesigned functions into one
@@ -729,36 +775,160 @@ These are meant to be checked, not just remembered:
    doesn't creep past what a tutorial-scale, 3-content-type project needs to
    demonstrate.
 
-## 12. Target design for the rewrite: the Mapping escalation ladder
+## 12. Target design for the rewrite: the agentic residue tier (supersedes the old linear escalation ladder)
 
-Not yet implemented — this is the agreed target shape the rewrite should
-build toward, replacing the current single-post, tie-blind logic:
+**This section replaced an earlier design** that was a strictly linear
+cascade — deterministic check, then an isolated LLM judgment call if that
+failed, then human escalation if *that* failed — with each stage calling
+the next only on failure, one field or one body-scan token at a time
+(exactly the shape Bug 6, §6, shows going wrong in practice: post 19's
+`meta.slug` and its five independently-true body mentions were each judged
+in total isolation, never seeing each other's evidence). That old shape is
+kept nowhere else in this document except as the explicit contrast case
+Bug 6 and this section both argue against; do not re-derive it.
 
-1. **Deterministic** (`schema_declared`, `value_range_match`,
-   `exact_string_match`): a field/value resolves without ambiguity once every
-   post/value sharing that field is aggregated — no ties, no conflicting
-   evidence. Stays simple, cheap, and provably correct; no LLM involved. This
-   tier existing and staying non-agentic is deliberate — collapsing
-   everything into LLM judgment would contradict the original spec's own
-   framing of `related_product_ids` as "a high-confidence, non-LLM
-   value-match" once the numbers are actually checked.
-2. **Schema-aware LLM judgment**: triggered when tier 1 can't resolve cleanly
-   — a tie between candidates (Bug 1's scenario), or a free-text/ambiguous
-   field with no exact/range match (the `meta.slug` case). The LLM must be
-   given, and must reason over, **both sides' schema context**: the source
-   field's other occurrences (other posts sharing the field, surrounding
-   body text) and the candidate target's context (other values in that
-   column, related tables) — aggregated across every post/value that shares
-   the field, not just the first one encountered. This directly fixes Bug 2
-   as part of the redesign, not as a separate patch. Once Discovery's
-   semantic-enrichment step (§4) exists, its cached gloss for the field is
-   additional evidence handed to this tier's prompt — it narrows the
-   judgment, it does not replace it; the cross-system decision is still made
-   here, not in Discovery.
-3. **Human escalation**: reached only when tier 2, with full schema-aware
-   context, still can't decide — an honest possible outcome, not a rare
-   theoretical branch, and it must be recorded (`human_escalation` or
-   `no_match_confirmed`) exactly like every other resolution.
+**What's wrong with the linear shape, precisely.** It treats "what to look
+at next" and "when to defer vs. decide vs. ask a human" as fixed control
+flow instead of as judgments that themselves require reasoning over
+accumulating evidence. A real reconciliation task doesn't cleanly
+decompose into "try deterministic, then try one LLM call, then give up to
+a human" per isolated fact — the *productive* order of investigation (look
+at this post's other fields because they'll help resolve that field; defer
+this case because a different pending case's answer will settle it for
+free; ask the human this question first because answering it collapses
+several other open cases at once) is itself a planning problem, and a
+fixed cascade can't express it.
+
+**The agreed replacement, in two tiers, not three:**
+
+1. **Tier 1 — exhaustive, automatic, deterministic, unchanged in spirit.**
+   Every schema-declared field and every body-scan token gets checked
+   against every candidate, aggregated across every post/value that shares
+   it (fixing Bug 2 as part of this, not as a separate patch) — no ties, no
+   conflicting evidence, no LLM involved. This tier stays non-agentic
+   *deliberately*: it's free, it's provably correct by inspection, and there
+   is no efficiency argument for routing it through an agent. This is also
+   where §7's Change A (skip WordPress's `readonly` platform fields) and
+   Bug 1/3/4/5's fixes belong once they're implemented — none of those
+   bugs are about tier 1 needing to be agentic, they're about tier 1's own
+   determinism being incomplete or tie-blind.
+   - **What tier 1 can't resolve becomes `residue`, not an LLM call.**
+     Precisely: a field-match case where a fuzzy-candidate list is
+     non-empty but no exact/range match won, or a body-scan token with
+     candidates but no unique winner. A case with **zero** candidates is
+     *not* residue — it resolves for free, immediately, as
+     `no_match_confirmed` (a true negative costs nothing to record and
+     shouldn't wait on anything). Tier 1's matchers are also exposed as
+     on-demand tools the agent tier can re-invoke directly (see below),
+     so nothing computed here needs to be duplicated in tier 2's context.
+2. **Tier 2 — a single agent with full visibility over the whole residue
+   pool.** One agent, one LangGraph tool-calling loop, sees *every* pending
+   residue item across *every* post and field at once, plus every already-
+   committed `mapping_rules` row, plus the same schema/value context tier 1
+   used. It decides for itself, per step, what to do next:
+   - inspect a specific post's other fields/body text (because that will
+     help resolve *this* residue item, or another one),
+   - inspect a specific candidate's other context (other values in that
+     column, related rows),
+   - query already-resolved `mapping_rules` for a precedent that might
+     transfer to a pending case,
+   - write a resolution for a case it's now confident about,
+   - explicitly defer a case (not enough information yet, but doesn't need
+     a human either — a later step, or a later fact, might resolve it),
+   - or escalate a case to a human, immediately, as a single targeted
+     question — not queued, not ranked by a separate algorithm. The
+     agent's own judgment of "nothing else can move without this answer"
+     *is* the prioritization; no extra scheduling logic is needed on top.
+
+   This is a genuine **blackboard architecture** (shared, incrementally-
+   filled state; opportunistic activation — the agent picks what's ripe to
+   act on, not a fixed order) crossed with ordinary agentic tool use, not a
+   new invention specific to this project. Human-answer propagation (§14)
+   falls out of this shape *for free*: once a human answers an
+   `escalate_to_human` interrupt, the agent resumes its own loop with that
+   new fact available via the same "query already-resolved rules" tool it
+   already has — no separate clustering/propagation node is needed, because
+   there's only ever one agent with full visibility, not several
+   independent per-cluster judgments that would need reconciling.
+
+**Tools (contracts drafted, not yet individually approved/implemented —
+§11 rule 6 applies to each of these before it's coded):**
+
+| Tool | Purpose |
+|---|---|
+| `get_post_context(post_id)` | full text/fields for one WordPress post, on demand |
+| `get_candidate_context(content_type, ref)` | full record + related rows for one Strapi candidate, on demand |
+| `query_mapping_rules(filter)` | read already-committed resolutions — the mechanism that makes precedent/propagation emergent rather than a separate step |
+| `propose_resolution(source_ref, target_ref, confidence, reasoning)` | writes a row via `store.record(...)`, tagged `method="agent_judgment"` — a new, distinct value from tier 1's methods and from the old `llm_judgment`, so §13's provenance stays honest about which tier decided what |
+| `defer(source_ref, reason)` | explicit no-op-for-now; the case stays in residue, no human involved |
+| `escalate_to_human(source_ref, question, reasoning)` | triggers LangGraph's `interrupt()` immediately, one question at a time |
+
+**Termination — two mechanisms, only one of which is load-bearing.**
+
+- **The no-progress guard is the real, correct termination condition.** If
+  a full pass over the agent's loop produces zero new
+  `propose_resolution`/`escalate_to_human` calls, nothing further can be
+  gained by continuing — the honest move is to stop and force-escalate
+  whatever remains in residue, not spin. This is the mechanism that
+  actually decides when the agent tier is "done."
+- **A generous hard step-count ceiling is a pure safety net, not the real
+  logic.** It exists only to guard against the no-progress guard itself
+  having a bug (e.g. miscounting what counts as "progress"). It's
+  deliberately set high enough that it should never fire in a correct run
+  — a low ceiling would silently mask a real no-progress bug by cutting
+  the loop short before the guard gets a chance to detect it, which would
+  be strictly worse than letting a broken guard run long and be noticed.
+
+```mermaid
+flowchart TD
+    A[plan_mapping_tasks] --> B["resolve_mapping_task (Send fan-out, per task)"]
+    B -->|resolutions| C[(mapping_rules)]
+    B -->|residue| D{residue empty?}
+    D -->|yes| E[summarize]
+    D -->|no| F[agent_step]
+    F -->|propose_resolution| C
+    F -->|defer| F
+    F -->|escalate_to_human| G[interrupt: one question]
+    G -->|human answer| F
+    F -->|no-progress guard trips| E
+```
+
+**Implementation status, verified against live data.** `mapping.py`'s side
+of this is done and confirmed: `_resolve_or_defer` replaces
+`_record_llm_judgment` with zero LLM calls anywhere in tier 1;
+`_resolve_field_match`/`_resolve_body_scan` return `(resolutions, residue)`
+tuples; `resolve_mapping_task` returns `{"resolutions": ..., "residue":
+...}`; `graph.py`'s `PipelineState` has a `residue: Annotated[list[dict],
+operator.add]` key using the same parallel-`Send`-safe reducer as
+`resolutions`. Running `python run.py` against the live WordPress/Strapi
+seed data twice (fresh cache, then a different thread with the same
+cache) produces, both times: **26 resolutions** (`no_match_confirmed`: 24,
+`schema_declared`: 1, `value_range_match`: 1), **22 residue items** (post
+19's `meta.slug`, plus every body-scan mention across posts 14/19/21/22/23
+— `bx54`, `focus`, `engraver`, `lens`, `replacement`, `laser`, `switch`,
+`filter`, `cartridge`, `safety`, `veridian`, `light`), and **0 LLM calls**.
+Identical residue across both runs confirms it re-derives deterministically
+rather than depending on cache state (nothing writes `residue` to
+`mapping_rules` — it's recomputed by tier 1 every run until the agent tier
+actually resolves or escalates each item).
+
+**Not yet implemented:** the `agent_step` node itself; the six tools above
+(none exist yet — `llm_client.py`'s current `judge()` is a single-shot
+classification call and will likely need reworking into a general
+tool-calling chat loop rather than being reused as-is); the routing/
+conditional edge that sends non-empty `residue` to `agent_step` instead of
+straight to `summarize`; new `PipelineState` keys for the agent's own
+notes/step counters; the no-progress guard's exact implementation; and the
+step-count ceiling's exact (generous) value. Each still needs its own
+plain-language contract proposed and confirmed before being coded, per
+§11 rule 6 — nothing above should be treated as already built just because
+it's now written down here.
+
+**Open, not yet decided:** whether this agentic-residue redesign should be
+LangGraph-specific (a deliberate divergence flagged in the four-framework
+comparison, §1c) or whether the same shape should be built for the other
+three frameworks too, for the comparison to stay apples-to-apples. Not yet
+asked; flagged here so it isn't forgotten before those other builds start.
 
 ## 13. Mapping's decision provenance: enriching `mapping_rules` (target design, not yet implemented)
 
@@ -769,6 +939,19 @@ spotted this from two angles: (1) a future LLM judgment could be improved by
 seeing past reasoning on related fields, and (2) a `human_escalation` row
 should hand the human *something*, not just a bare pointer.
 
+**Written before the §12 agentic-residue redesign; the principles below
+still hold, the mechanism description is now stale.** This section still
+describes the old single-shot `_record_llm_judgment` call site as the thing
+that would populate these columns. That function no longer exists (§5, §12)
+— the write path is now the agent tier's `propose_resolution` and
+`escalate_to_human` tools, and the method value is `agent_judgment`, not
+`llm_judgment`. The *design* (which columns, why, the provenance-vs.-
+current-truth split) is unaffected by that and doesn't need re-deciding;
+only the "who calls `store.record(...)`" detail changes. Treat every
+`_record_llm_judgment`/`llm_judgment` mention below as historical
+shorthand for "whichever tool call in the agent tier ends up writing the
+row" until this section gets its own pass to update the names.
+
 **What's already being silently discarded, right now.** `llm_client.py`'s
 `JUDGMENT_SYSTEM_PROMPT` requires the model to return a `"reasoning"` field on
 *every* call — but `mapping.py`'s `_record_llm_judgment` reads `decision` and
@@ -778,7 +961,11 @@ Strapi option considered, not just the winner) is passed *into*
 `_record_llm_judgment` but never persisted at all. For `escalate`/`no_match`
 outcomes this means a `human_escalation` row today carries nothing beyond
 `evidence` (the input trigger) and `confidence=0.0` — a human has to rebuild
-"what could this even be" from scratch, which defeats the point.
+"what could this even be" from scratch, which defeats the point. (This
+paragraph describes code that no longer exists — `_record_llm_judgment` is
+deleted — but the gap it describes is real and unaddressed: nothing in the
+agent tier's draft tool contracts yet nails down exactly how
+`propose_resolution`/`escalate_to_human` will populate these same columns.)
 
 **Proposed new columns** (10 → 17 total; all seven nullable/defaulted, so
 every existing deterministic method — `schema_declared`, `value_range_match`,
@@ -824,10 +1011,13 @@ duplication.** `target_system`/`target_content_type`/`target_ref`/
 if a human corrects them. `method` does **not** change on override — it
 stays "how the original auto-resolution was reached." `resolution_status` is
 the one column that says whether `method`'s original answer still stands.
-So `method=llm_judgment, resolution_status=human_overridden` reads cleanly as
-"the LLM made this call; a human has since corrected the target now shown" —
-provenance and current truth both survive without a parallel set of
-`override_target_*` columns.
+So `method=agent_judgment, resolution_status=human_overridden` reads cleanly
+as "the agent made this call; a human has since corrected the target now
+shown" — provenance and current truth both survive without a parallel set
+of `override_target_*` columns. (This example used `method=llm_judgment`
+before the §12 redesign; `agent_judgment` is the current name for the same
+idea — a resolution the agent tier decided, as opposed to tier 1's
+deterministic methods or a human's own review.)
 
 **The `agent_reasoning` trick substantially closes the audit-trail gap this
 design would otherwise have.** Once `target_ref`/`confidence` are overwritten
@@ -851,23 +1041,46 @@ invariant ever stops holding.
 
 **Not yet implemented.** Like §4, this is a documented decision, not a code
 change: schema changes in `store.py` (`SCHEMA`, `record()`, `lookup()`),
-`llm_client.judge()` attaching `model` to its return dict, and `mapping.py`
-constructing `agent_reasoning` (per the rule above) and threading
-`candidates_considered` through `_record_llm_judgment` all still need their
-own one-function-at-a-time, approved-before-written pass per §11. There is
-deliberately no write path proposed here yet for *how* a human actually sets
-`resolution_status`/`reviewed_by`/`human_reason` (CLI? a second script?
-manual SQL for the tutorial?) — that's a separate design conversation, not
-assumed by this schema.
+the model attribution living somewhere in the agent tier's own LLM-calling
+code (successor to `llm_client.judge()`, still to be designed per §12), and
+`propose_resolution`/`escalate_to_human` (successors to
+`_record_llm_judgment`) constructing `agent_reasoning` (per the rule above)
+and threading `candidates_considered` through — all still need their own
+one-function-at-a-time, approved-before-written pass per §11, and now sit
+*behind* §12's tool contracts rather than ahead of them: this section's
+columns can't be wired up until the tools that would populate them exist.
+There is deliberately no write path proposed here yet for *how* a human
+actually sets `resolution_status`/`reviewed_by`/`human_reason` (CLI? a
+second script? manual SQL for the tutorial? — or, now, simply answering the
+`escalate_to_human` `interrupt()` and having the agent's resulting
+`propose_resolution` call set them) — that's a separate design
+conversation, not assumed by this schema.
 
-## 14. Human-answer propagation across correlated escalations (research-grounded, target design, not yet implemented)
+## 14. Human-answer propagation across correlated escalations (research-grounded background; largely superseded by §12's shape, not a separate build)
 
-The escalation ladder's tier 3 (§12) treats every escalated case
-independently: ten correlated escalations get reviewed as ten separate,
-unrelated decisions, even when resolving the most salient one would tell you
-almost everything about the rest. That's a real gap, and it isn't a novel
-problem — it's a named, well-studied one under a few different labels
-depending on the field, with existing tooling built around it:
+**Resolved differently than this section originally proposed — read §12
+first.** This section was written against the *old* linear ladder, where
+tier 3 (human escalation) was a separate stage with no visibility into
+other pending cases, which is why propagation looked like it needed its own
+clustering/retrieval machinery bolted on afterward. Under §12's shape that
+premise no longer holds: there is only ever **one** agent, with full
+visibility over the entire residue pool *and* every already-committed
+`mapping_rules` row, at every step — including right after a human answers
+an `escalate_to_human` interrupt. Propagation isn't a separate feature to
+build; it's what naturally happens the next time that same agent's loop
+runs `query_mapping_rules` and finds the new fact sitting there. The
+research below is kept because it's what *justified* preferring "one agent,
+full visibility" over a fixed cluster-then-propagate step in the first
+place — not because there's a remaining implementation gap of the kind this
+section originally described.
+
+The original framing: the escalation ladder's tier 3 treats every escalated
+case independently — ten correlated escalations get reviewed as ten
+separate, unrelated decisions, even when resolving the most salient one
+would tell you almost everything about the rest. That's a real gap, and it
+isn't a novel problem — it's a named, well-studied one under a few
+different labels depending on the field, with existing tooling built
+around it:
 
 - **Cluster-based / representative active learning** — instead of asking a
   human to label every uncertain item, cluster the uncertain items by
@@ -890,75 +1103,119 @@ depending on the field, with existing tooling built around it:
   behind one resolved instance, not just its answer, to derive a rule that
   covers structurally similar instances.
 
-**Three ways to build this here, in increasing order of power and risk:**
+**Three ways this could have been built, in increasing order of power and
+risk — kept for the record of what was considered:**
 
-| Strategy | Mechanism | When it's safe |
-|---|---|---|
-| **(a) Cluster-then-propagate** | Group pending escalations by structural signature (same field name across posts, same mention-token pattern) *before* escalating; escalate only the most representative one; apply the human's answer directly to the rest of the cluster. | Only when the grouped cases are structurally identical, not merely similar. |
-| **(b) Few-shot exemplar injection** | Retrieve similar already-resolved `mapping_rules` rows (their `agent_reasoning`/`human_reason`, §13) and hand them to the LLM as precedent for the next pending case, before falling back to escalating again. | Safer and more general — the LLM judges per case whether the precedent actually applies, instead of a mechanical copy. |
-| **(c) Rule synthesis** | Turn the human's single resolution into an explicit rule (e.g. "field named `slug` on WordPress → match Strapi `sku`, stripping the vendor prefix") and apply that rule deterministically to the rest before any further LLM call. | Highest quality, but real design/engineering work — a small rule-induction step, not a lookup. |
+| Strategy | Mechanism | When it's safe | Status under §12 |
+|---|---|---|---|
+| **(a) Cluster-then-propagate** | Group pending escalations by structural signature (same field name across posts, same mention-token pattern) *before* escalating; escalate only the most representative one; apply the human's answer directly to the rest of the cluster. | Only when the grouped cases are structurally identical, not merely similar. | **Not adopted.** A separate clustering node would impose a fixed grouping key, the same objection raised against Bug 6's superseded fix (§6) — the single full-visibility agent decides similarity itself, case by case, instead. |
+| **(b) Few-shot exemplar injection** | Retrieve similar already-resolved `mapping_rules` rows (their `agent_reasoning`/`human_reason`, §13) and hand them to the LLM as precedent for the next pending case, before falling back to escalating again. | Safer and more general — the LLM judges per case whether the precedent actually applies, instead of a mechanical copy. | **This is essentially what `query_mapping_rules` gives the agent for free** (§12) — no separate retrieval step needed; it's just another tool call inside the same loop. |
+| **(c) Rule synthesis** | Turn the human's single resolution into an explicit rule (e.g. "field named `slug` on WordPress → match Strapi `sku`, stripping the vendor prefix") and apply that rule deterministically to the rest before any further LLM call. | Highest quality, but real design/engineering work — a small rule-induction step, not a lookup. | **Not adopted**, still the highest-power option on the table if the agent-per-case approach ever proves too slow/expensive at real scale — out of scope for this tutorial-scale project (§2). |
 
-**The substrate for (a)/(b) already exists once §13 is built — this section
-adds a *retrieval and clustering* step, not new storage.** A resolved
+**The substrate for (b) already exists once §13 is built.** A resolved
 `mapping_rules` row with `agent_reasoning` + `human_reason` +
-`candidates_considered` populated already *is* the exemplar. What's missing
-is (1) a step before escalation that groups pending cases instead of
-escalating them one at a time with no notion that they're related, and (2)
-a retrieval step that pulls similar resolved rows into the next LLM call
-before it escalates a still-pending case.
+`candidates_considered` populated already *is* the exemplar `query_mapping_rules`
+would surface — no separate retrieval index or clustering pass needed on
+top of what §13 already proposes.
 
-**The real risk, and why it has to stay distinguishable from an
-independent human review.** Propagating one human's answer onto "a few
-other cases if not all" is a fundamentally different kind of decision than
-that same human independently reviewing each one — case #2 might only
-*resemble* case #1 without truly sharing its rule. If a propagated
-resolution is written into `mapping_rules` indistinguishably from a
-genuinely-reviewed row, it quietly erodes the exact audit trail §13 exists
-to build. The fix is cheap given what §13 already proposes: a fourth
-`resolution_status` value, `human_propagated` (alongside `auto` /
-`human_confirmed` / `human_overridden`), so it's always queryable which rows
-were actually reviewed by a human versus inferred from a related review —
-this slots into the existing enum rather than requiring new columns.
+**The real risk still applies under §12, even without a separate propagation
+step — this part of the section is not superseded.** Using a human's answer
+to *one* case as evidence for a *different but similar* case is still a
+fundamentally different kind of decision than that same human independently
+reviewing each one — case #2 might only *resemble* case #1 without truly
+sharing its rule. What changes under §12 is *who's making that judgment
+call*: it's the agent, per case, via an ordinary `propose_resolution` call
+(informed by the human's answer as retrieved evidence) — not a mechanical
+copy performed by a dedicated propagation node. Because that write still
+goes through `propose_resolution`, it's correctly tagged
+`method=agent_judgment`, not attributed to the human — which already keeps
+it honestly distinguishable from `human_confirmed`/`human_overridden`
+without needing anything new. **Open question, not yet decided:** whether
+§13's proposed fourth `resolution_status` value, `human_propagated`, is
+still worth keeping for a narrower case — one where the agent doesn't
+exercise real per-case judgment at all and instead does something closer
+to a literal copy (e.g. "identical `source_ref` pattern, apply the same
+target verbatim") — or whether `agent_judgment` already covers every case
+that can actually arise once every propagation goes through the agent's own
+reasoning. Lean toward *not* adding it unless a concrete case shows up where
+`agent_judgment` alone is misleading.
 
-**The LangGraph-specific angle.** LangGraph has no first-class primitive for
-"correlate pending interrupts, ask the human once, propagate the answer" —
-`interrupt()` pauses one thread for one decision, and nothing built-in looks
-across multiple pending interrupts to find that they're related. Building
-this means explicit graph structure: a clustering node *before* the
-escalation/interrupt node, and a propagation node *after* resume that
-re-evaluates the rest of the cluster with the human's answer as new
-evidence. That extends §9b's verdict ("app logic sitting beside the
-framework, not something the framework subsumes") one step further, and is
-itself a real, concrete data point for the four-framework comparison, not a
-generic caveat.
+**The LangGraph-specific angle, revised.** The original concern — LangGraph
+has no first-class primitive for "correlate pending interrupts, ask the
+human once, propagate the answer," since `interrupt()` pauses one thread for
+one decision — is still true, but it's no longer a gap this design needs to
+fill with extra graph structure. Under §12's shape there's only ever one
+`agent_step` node with a self-loop; the "propagation" is just that same node
+running again after `interrupt()` resumes, with one more fact available via
+`query_mapping_rules`. No dedicated clustering node, and no dedicated
+propagation node, are needed — which is itself a concrete, useful data
+point for the four-framework comparison (§9b's "app logic sitting beside the
+framework" verdict, but resolved by *not* building bespoke structure here,
+rather than by building it).
 
-**Not yet implemented**, and sequenced *after* §13 — the exemplar bank this
-depends on (`agent_reasoning`/`human_reason`/`candidates_considered`) has to
-exist before there's anything to cluster or retrieve.
+**Status: mostly resolved by §12's design choice, not implemented as a
+separate feature, and not expected to be.** The one open thread is the
+`resolution_status` question directly above — everything else this section
+originally proposed building is superseded by "one agent, full visibility"
+rather than scheduled to be built on top of it.
 
 ## 15. Where things stand / next steps
 
-- This document itself needs the user's review before being treated as
-  settled — same step-by-step-approval preference as the code.
-- Once agreed, the ground-up `mapping.py` rewrite begins, one function's
-  contract at a time (§11 rule 6), starting from `_match_ints`/`_match_string`,
-  `plan_mapping_tasks`'s aggregation loop, and the fuzzy-candidate/task-
-  planning mechanism (`_fuzzy_candidates`, `vocab.py`'s tokenizer,
-  `route_mapping_tasks`'s per-field/per-token fan-out) — the places the six
-  confirmed bugs live — before moving on to Change A and the new
-  LLM-judgment tier.
-- Change A (readonly-field exclusion) is small and independent of the rest
-  of the rewrite; it can land first or alongside it without blocking on the
-  escalation-ladder redesign.
-- Discovery's semantic-enrichment role (§4) is agreed in principle but not
-  yet implemented; it's sequenced *after* this document is settled, and its
-  own function contract (what exactly gets sent to the LLM, what the cache
-  table looks like) needs the same one-step, get-a-yes-first treatment as
-  everything else in §11 before any code gets written.
-- Mapping's `mapping_rules` provenance enrichment (§13) is agreed — including
-  the model column and the resolution_status/reviewed_by columns — but also
-  not yet implemented, and also sequenced after this document is settled.
-- Human-answer propagation across correlated escalations (§14) is a real,
-  research-grounded idea, but it explicitly depends on §13 landing first
-  (the exemplar bank it clusters/retrieves from doesn't exist until then) —
-  it is the last item in this chain, not sequenced ahead of §4 or §13.
+**This section is now the actual current-state pointer — read it first when
+resuming this work.** §12 replaced the old linear escalation ladder with an
+agentic residue tier; that redesign is agreed and partly implemented, not
+just proposed. The rest of this list is the concrete, ordered remainder.
+
+**Done, verified against live data (§5, §12):**
+- `mapping.py`: `_record_llm_judgment` deleted; `_resolve_or_defer` added
+  (cache hit → return cached; zero candidates → free `no_match_confirmed`;
+  ambiguous → `residue` item, no LLM call). `_resolve_field_match`/
+  `_resolve_body_scan`/`resolve_mapping_task` all updated to return
+  `(resolutions, residue)`.
+- `graph.py`: `PipelineState.residue: Annotated[list[dict], operator.add]`
+  added, same reducer as `resolutions`; module docstring updated to explain
+  why both keys need it (parallel `Send` fan-out).
+- `run.py`: prints residue counts/contents per run; asserts residue is
+  identical across both demo runs (in addition to the pre-existing
+  zero-new-LLM-calls and identical-resolutions assertions).
+- Confirmed by running `python run.py`: **0 LLM calls**, 26 resolutions, 22
+  residue items, identically on both runs.
+
+**Not yet implemented — the concrete next steps, in order, each needing its
+own plain-language contract and explicit yes per §11 rule 6 before being
+coded (this is exactly where a fresh session should pick up):**
+1. The `agent_step` node's exact tool contracts — start with
+   `get_post_context`, `get_candidate_context`, and `query_mapping_rules`
+   (read-only, lowest-risk, and needed before the write-side tools make
+   sense to design).
+2. `propose_resolution` and `defer` — the write-side and no-op tools; this
+   is also where `agent_reasoning`/`candidates_considered` construction
+   (§13) actually gets threaded through for the first time, since
+   `_record_llm_judgment` (the old place that would have done this) is
+   gone.
+3. `escalate_to_human` and the `interrupt()` wiring — smallest in code
+   surface but needs its own careful contract (what exactly the human sees,
+   what resuming looks like).
+4. New `PipelineState` keys for the agent's own notes/step counters, and the
+   routing/conditional edge that sends non-empty `residue` to `agent_step`
+   instead of straight to `summarize` (currently unconditional).
+5. The no-progress guard's exact implementation (what counts as "progress"
+   — this needs to be nailed down precisely, since it's the load-bearing
+   termination condition, §12) and the generous step-count ceiling's exact
+   value (pure safety net, per the user's explicit instruction not to let
+   it mask a real no-progress bug).
+6. `store.py` schema changes for §13's seven new columns, once there's a
+   concrete write path (step 2 above) that would populate them.
+7. §4 (Discovery semantic enrichment) and the `resolution_status`/
+   `human_propagated` open question left in §14 remain agreed-in-principle
+   background work, not on the critical path of the agent tier above — pick
+   up whenever, no ordering dependency on steps 1–6.
+8. **Not yet asked:** whether the agentic-residue redesign is a deliberate
+   LangGraph-specific divergence in the four-framework comparison (§1c), or
+   whether it should be built the same way in the other three frameworks
+   too. Flagged in §12 as well — resolve before those other builds start,
+   not after.
+9. This document itself has now been brought up to date with everything
+   through step 4 of the original process (§11 rule 6: "show its output
+   against real data" — done, see §5/§12); it still needs the user's review
+   before the *next* function's contract (step 1 above) gets proposed.
