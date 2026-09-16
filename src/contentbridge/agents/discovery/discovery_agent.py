@@ -7,7 +7,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from rich.console import Console
 from rich.markdown import Markdown
 
-from contentbridge.agents.discovery.capabilities.fileoperations import FileOperations
+from contentbridge.agents.discovery.capabilities.file_operations import FileOperations
 from contentbridge.agents.discovery.capabilities.skills import Skills
 from contentbridge.agents.discovery.deps import AgentDeps
 from contentbridge.agents.discovery.utils import get_env
