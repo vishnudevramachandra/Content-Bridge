@@ -8,9 +8,10 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from contentbridge.agents.discovery.capabilities.file_operations import FileOperations
+from contentbridge.agents.discovery.capabilities.database_operations import DatabaseOperations
 from contentbridge.agents.discovery.capabilities.skills import Skills
 from contentbridge.agents.discovery.deps import AgentDeps
-from contentbridge.agents.discovery.utils import get_env
+from contentbridge.utils.utils import get_env
 
 _INSTRUCTIONS = (
     "You are a Python coding agent.\n"
@@ -42,6 +43,7 @@ async def run_agent() -> None:
         instructions=_INSTRUCTIONS,
         capabilities=[
             FileOperations(),
+            DatabaseOperations(),
             Skills(),
         ],
         deps_type=AgentDeps,
