@@ -142,3 +142,6 @@ def main() -> None:
         asyncio.run(run_agent())
     except (EOFError, KeyboardInterrupt):
         pass
+
+if __name__ == "__main__":
+    main()
