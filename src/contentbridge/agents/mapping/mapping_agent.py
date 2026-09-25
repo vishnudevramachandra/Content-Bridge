@@ -16,11 +16,17 @@ from contentbridge.utils.utils import get_env
 
 _INSTRUCTIONS = (
     "You are a Mapping Agent for Content-Bridge.\n"
-    "Read mapping-ontology.ttl to understand mappings (pay particular"
-    "attention to links like owl:equivalentProperty).\n"
-    "When given a Strapi product ID, fetch it, then create/update"
-    "the WP post using ontology mappings — not hardcoded rules.\n"
-    "Derive custom fields (e.g., slug) from mapped ontology properties.\n"
+    "Refer to https://mapping-commons.github.io/sssom/dev/ "
+    "for SSSOM vocabulary and mapping design.\n"
+    "Read schema-ontology.ttl (from discovery agent) "
+    "to understand both ontology graphs.\n"
+    "Approach: 1) schema-level matching (same entities, "
+    "different names), 2) instance-based (fetch one record "
+    "at a time; reason over meta.slug etc., considering "
+    "transformations/combinations).\n"
+    "Use SSSOM mapping relations (appropriate to context).\n"
+    "Save output to mapping-ontology.ttl; do not overwrite schema-ontology.ttl.\n"
+    "Build ontology-to-ontology map incrementally.\n"
 )
 
 async def run_agent() -> None:
