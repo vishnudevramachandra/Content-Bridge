@@ -114,3 +114,11 @@ class StrapiClient:
         )
         resp.raise_for_status()
         return resp.json()["results"]
+
+    def get_entry(self, uid: str, entry_id: int) -> dict:
+        resp = requests.get(
+            f"{STRAPI_BASE_URL}/content-manager/collection-types/{uid}/{entry_id}",
+            headers=self._headers(), timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()["data"]

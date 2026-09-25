@@ -33,3 +33,8 @@ class WPClient:
         tax_resp.raise_for_status()
         all_taxonomies = tax_resp.json()
         return {all_taxonomies[slug]["rest_base"] for slug in taxonomy_slugs if slug in all_taxonomies}
+
+    def get_post(self, post_id: int) -> dict:
+        resp = requests.get(f"{WORDPRESS_API}/posts/{post_id}", timeout=10)
+        resp.raise_for_status()
+        return resp.json()
