@@ -23,7 +23,7 @@ def fetch_strapi_product(product_id: str) -> dict:
     Returns
     -------
     dict
-        Product record with legacyId and fields.
+        A product record/row from Strapi.
     """
     client = StrapiClient()
     # Fetch from api::product.product; filter by documentId or id

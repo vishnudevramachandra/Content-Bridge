@@ -9,13 +9,16 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from contentbridge.agents.sync.deps import AgentDeps
+from contentbridge.agents.sync.capabilities.file_operations import FileOperations
+from contentbridge.agents.sync.capabilities.strapi_fetch import StrapiFetch
+from contentbridge.agents.sync.capabilities.wp_client import WPOperations
 from contentbridge.utils.utils import get_env
 
 _INSTRUCTIONS = (
     "You are a Sync Agent for Content-Bridge.\n"
-    "Read mapping-ontology.ttl to understand mappings (pay particular\n"
+    "Read mapping-ontology.ttl to understand mappings (pay particular"
     "attention to links like owl:equivalentProperty).\n"
-    "When given a Strapi product ID, fetch it, then create/update\n"
+    "When given a Strapi product ID, fetch it, then create/update"
     "the WP post using ontology mappings — not hardcoded rules.\n"
     "Derive custom fields (e.g., slug) from mapped ontology properties.\n"
 )
@@ -36,6 +39,7 @@ async def run_agent() -> None:
     agent = Agent[AgentDeps](
         model=model,
         instructions=_INSTRUCTIONS,
+        capabilities=[FileOperations(), StrapiFetch(), WPOperations()],
         deps_type=AgentDeps,
     )
 
