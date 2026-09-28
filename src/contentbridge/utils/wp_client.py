@@ -35,6 +35,12 @@ class WPClient:
         return {all_taxonomies[slug]["rest_base"] for slug in taxonomy_slugs if slug in all_taxonomies}
 
     def get_post(self, post_id: int) -> dict:
-        resp = requests.get(f"{WORDPRESS_API}/posts/{post_id}", timeout=10)
-        resp.raise_for_status()
-        return resp.json()
+        """Fetch a single WP post by ID; return error dict on 404."""
+        try:
+            resp = requests.get(f"{WORDPRESS_API}/posts/{post_id}", timeout=10)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.HTTPError as e:
+            if resp.status_code == 404:
+                return {"error": "post not found", "post_id": post_id}
+            raise

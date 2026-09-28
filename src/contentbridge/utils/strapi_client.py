@@ -116,9 +116,15 @@ class StrapiClient:
         return resp.json()["results"]
 
     def get_entry(self, uid: str, entry_id: int) -> dict:
-        resp = requests.get(
-            f"{STRAPI_BASE_URL}/content-manager/collection-types/{uid}/{entry_id}",
-            headers=self._headers(), timeout=10,
-        )
-        resp.raise_for_status()
-        return resp.json()["data"]
+        """Fetch a single Strapi entry; return error dict on 404."""
+        try:
+            resp = requests.get(
+                f"{STRAPI_BASE_URL}/content-manager/collection-types/{uid}/{entry_id}",
+                headers=self._headers(), timeout=10,
+            )
+            resp.raise_for_status()
+            return resp.json()["data"]
+        except requests.HTTPError as e:
+            if resp.status_code == 404:
+                return {"error": "entry not found", "uid": uid, "entry_id": entry_id}
+            raise
