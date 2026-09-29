@@ -59,6 +59,66 @@ def _login() -> str:
     return _cached_token
 
 
+def _to_qs_pairs(params: dict) -> list[tuple[str, str]]:
+    """Flatten a dict with nested dicts/lists (e.g. `{"filters": {"legacyId":
+    {"$in": [1, 2]}}}`) into the bracket-notation pairs Strapi's `qs`-based
+    query parser expects (`filters[legacyId][$in][0]=1&filters[legacyId][$in][1]=2`).
+
+    `requests` has no built-in support for this: passed a nested dict as
+    `params`, it silently mis-serializes it — for a dict value it iterates
+    the *value's own keys* instead of recursing, so `{"filters": {"legacyId":
+    ...}}` becomes the single pair `filters=legacyId` and the actual filter
+    condition is dropped, which is why Strapi ignored filters entirely and
+    returned every row instead of raising an error.
+    """
+    pairs: list[tuple[str, str]] = []
+
+    def _walk(key: str, value) -> None:
+        if isinstance(value, dict):
+            for k, v in value.items():
+                _walk(f"{key}[{k}]", v)
+        elif isinstance(value, (list, tuple)):
+            for i, v in enumerate(value):
+                _walk(f"{key}[{i}]", v)
+        elif isinstance(value, bool):
+            pairs.append((key, "true" if value else "false"))
+        elif value is not None:
+            pairs.append((key, str(value)))
+
+    for top_key, top_value in params.items():
+        _walk(top_key, top_value)
+
+    return pairs
+
+
+def _strapi_error(resp: requests.Response, **extra: object) -> dict:
+    """Build a structured error dict from a failed Strapi response, shared by
+    every client method so callers/agents always get the same shape
+    (`error`/`code`/`status`/`details` plus whatever call-specific fields the
+    caller passes in, e.g. `uid`, `entry_id`) instead of each method
+    inventing its own ad-hoc error format — and the same shape produced by
+    `wp_client._wp_error`, so an agent handling errors from either backend
+    doesn't need two different parsing branches.
+
+    Surfaces Strapi's own error body (e.g. `{"error": {"name":
+    "ValidationError", "message": "Invalid key notARealColumn", "details":
+    {...}}}`) when present: `name` is Strapi's machine-readable error-type
+    identifier (mapped to `code` here), analogous to WP's `code` field
+    (e.g. `"rest_post_invalid_id"`).
+    """
+    try:
+        detail = resp.json().get("error", {})
+    except ValueError:
+        detail = {}
+    return {
+        "error": detail.get("message", "Strapi request failed"),
+        "code": detail.get("name"),
+        "status": resp.status_code,
+        "details": detail.get("details"),
+        **extra,
+    }
+
+
 class StrapiClient:
     def __init__(self) -> None:
         self._token = _login()
@@ -115,16 +175,66 @@ class StrapiClient:
         resp.raise_for_status()
         return resp.json()["results"]
 
-    def get_entry(self, uid: str, entry_id: int) -> dict:
-        """Fetch a single Strapi entry; return error dict on 404."""
+    def query_entries(self, uid: str, params: dict | None = None) -> dict:
+        """Query Strapi entries with arbitrary filters/sort/pagination.
+
+        Filter-column validation is left to Strapi itself (via its 400
+        response, surfaced below) rather than pre-checked against the schema
+        here: a local check can only see top-level attribute names, so it
+        would either need to special-case every Strapi filter operator
+        (`$or`/`$and`/`$not`, ...) and relation/nested-field syntax, or reject
+        valid queries that use them. Strapi's own validator already handles
+        all of that correctly and is the authority on what's valid anyway.
+        """
+        query_params = {"populate": "*"}
+        if params:
+            query_params.update(params)
+        resp = requests.get(
+            f"{STRAPI_BASE_URL}/content-manager/collection-types/{uid}",
+            headers=self._headers(),
+            params=_to_qs_pairs(query_params),
+            timeout=10,
+        )
         try:
-            resp = requests.get(
-                f"{STRAPI_BASE_URL}/content-manager/collection-types/{uid}/{entry_id}",
-                headers=self._headers(), timeout=10,
-            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.HTTPError:
+            return _strapi_error(resp, uid=uid)
+
+    def get_entry(self, uid: str, entry_id: int | str) -> dict:
+        """Fetch a single Strapi entry by numeric `id` or `documentId`.
+
+        Strapi v5's content-manager single-entry endpoint is keyed by
+        `documentId` (a string, e.g. `"uk5w2fa0..."`) — not the numeric `id`
+        every record still has — so passing a numeric id straight into the
+        URL 404s even for a real entry. When `entry_id` looks numeric (an
+        `int`, or an all-digit `str`), this resolves it to a `documentId`
+        via a filtered `query_entries` lookup first; a non-numeric `str` is
+        assumed to already be a `documentId` and used as-is.
+        """
+        document_id = entry_id
+        if isinstance(entry_id, int) or (isinstance(entry_id, str) and entry_id.isdigit()):
+            lookup = self.query_entries(uid, params={"filters": {"id": {"$eq": entry_id}}, "pageSize": 1})
+            if "error" in lookup:
+                return {**lookup, "entry_id": entry_id}
+            results = lookup.get("results", [])
+            if not results:
+                return {
+                    "error": "Not Found",
+                    "code": "NotFoundError",
+                    "status": 404,
+                    "details": {},
+                    "uid": uid,
+                    "entry_id": entry_id,
+                }
+            document_id = results[0]["documentId"]
+
+        resp = requests.get(
+            f"{STRAPI_BASE_URL}/content-manager/collection-types/{uid}/{document_id}",
+            headers=self._headers(), timeout=10,
+        )
+        try:
             resp.raise_for_status()
             return resp.json()["data"]
-        except requests.HTTPError as e:
-            if resp.status_code == 404:
-                return {"error": "entry not found", "uid": uid, "entry_id": entry_id}
-            raise
+        except requests.HTTPError:
+            return _strapi_error(resp, uid=uid, entry_id=entry_id)

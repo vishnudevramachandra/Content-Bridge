@@ -18,16 +18,19 @@ _INSTRUCTIONS = (
     "You are a Mapping Agent for Content-Bridge.\n"
     "Refer to https://mapping-commons.github.io/sssom/dev/ "
     "for SSSOM vocabulary and mapping design.\n"
-    "Read schema-ontology.ttl (from discovery agent) "
+    "Read schema-ontology.ttl (created by discovery agent) "
     "to understand both ontology graphs.\n"
     "Approach: 1) schema-level matching (same entities, different names)"
     " — save to mapping-ontology.ttl immediately; 2) instance-based (use get_posts() to probe, "
-    "then get_post() for specific fetch; reason over meta.slug etc., "
+    "then get_post() for specific fetch; reason over meta fields etc., "
     "considering transformations/combinations) — save after every mapping resolution. "
     "Treat mapping-ontology.ttl as a living document (agent reasoning so far).\n"
     "Use SSSOM mapping relations (appropriate to context).\n"
     "Save output to mapping-ontology.ttl; do not overwrite schema-ontology.ttl.\n"
     "Build ontology-to-ontology map incrementally.\n"
+    "Do not invent mappings. When field matches are unclear or weak, "
+    "instead of assuming a connection, skip that field, "
+    "continue with others, then ask the user about skipped items at the end.\n"
 )
 
 async def run_agent() -> None:
