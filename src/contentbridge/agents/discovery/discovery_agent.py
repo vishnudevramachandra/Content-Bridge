@@ -91,30 +91,35 @@ _INSTRUCTIONS = (
     "  implementation. Use the available tools.\n"
 )
 
+# Module-level agent instance so it can be imported and delegated to
+# (e.g. by the orchestrator agent) instead of only being driven by the
+# interactive REPL in `run_agent()` below.
+_provider = OpenAIProvider(
+    base_url=get_env("OPENAI_API_BASE"),
+    api_key=get_env("OPENAI_API_KEY"),
+)
+
+_model = OpenAIResponsesModel(
+    model_name=get_env("MODEL"),
+    provider=_provider,
+)
+
+agent = Agent[AgentDeps](
+    model=_model,
+    name="discovery_agent",
+    instructions=_INSTRUCTIONS,
+    capabilities=[
+        FileOperations(),
+        DatabaseOperations(),
+        SearchOperations(),
+        # Skills(),
+    ],
+    deps_type=AgentDeps,
+)
+
+
 async def run_agent() -> None:
     console = Console()
-
-    provider = OpenAIProvider(
-        base_url=get_env("OPENAI_API_BASE"),
-        api_key=get_env("OPENAI_API_KEY"),
-    )
-
-    model = OpenAIResponsesModel(
-        model_name=get_env("MODEL"),
-        provider=provider,
-    )
-
-    agent = Agent[AgentDeps](
-        model=model,
-        instructions=_INSTRUCTIONS,
-        capabilities=[
-            FileOperations(),
-            DatabaseOperations(),
-            SearchOperations(),
-            # Skills(),
-        ],
-        deps_type=AgentDeps,
-    )
 
     async with httpx.AsyncClient() as http_client:
 
