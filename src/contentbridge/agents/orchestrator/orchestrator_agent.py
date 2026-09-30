@@ -95,26 +95,35 @@ agent = Agent[AgentDeps](
     output_type=[str, DeferredToolRequests],
 )
 
-# Sub-agents that currently support pausing to ask the human a question
-# (i.e. have an `ask_user` tool and `output_type=[str, DeferredToolRequests]`).
-# Only `discovery_agent` does today; `mapping_agent`/`sync_agent` always
-# return a plain `str`, so they never need this machinery.
-_DEFERRABLE_SUB_AGENTS = {"discovery_agent": discovery_agent}
+# Every sub-agent has an `ask_user` tool and `output_type=[str,
+# DeferredToolRequests]`, so any of them can pause to ask the human a
+# question. Extend this mapping (and `_build_sub_agent_deps` below) when
+# a new sub-agent is added.
+_DEFERRABLE_SUB_AGENTS = {
+    "discovery_agent": discovery_agent,
+    "mapping_agent": mapping_agent,
+    "sync_agent": sync_agent,
+}
 
 
-def _build_sub_agent_deps(agent_name: str, deps: AgentDeps) -> DiscoveryDeps:
-    """Build the dependency object for one of the deferrable sub-agents.
-
-    Only `discovery_agent` is deferrable today, so this only needs to
-    handle that one case; extend this when another sub-agent grows an
-    `ask_user` tool.
-    """
+def _build_sub_agent_deps(
+    agent_name: str, deps: AgentDeps
+) -> DiscoveryDeps | MappingDeps | SyncDeps:
+    """Build the dependency object for one of the deferrable sub-agents."""
     if agent_name == "discovery_agent":
         return DiscoveryDeps(
             console=deps.console,
             http_client=deps.http_client,
             search_api_key=deps.search_api_key,
         )
+    if agent_name == "mapping_agent":
+        return MappingDeps(
+            console=deps.console,
+            http_client=deps.http_client,
+            search_api_key=deps.search_api_key,
+        )
+    if agent_name == "sync_agent":
+        return SyncDeps(console=deps.console, http_client=deps.http_client)
     raise ValueError(f"Unknown deferrable sub-agent: {agent_name!r}")
 
 
@@ -174,6 +183,46 @@ async def resolve_ask_user_answer(
     return SubAgentAnswerOutcome(finished=True, text=result.output)
 
 
+async def _delegate(
+    ctx: RunContext[AgentDeps], agent_name: str, instruction: str
+) -> str:
+    """Run one sub-agent to completion, or pause the orchestrator with it.
+
+    Shared body for every `run_*_agent` delegation tool below: emits
+    progress events, runs the sub-agent, and — if *it* paused on its own
+    `ask_user` — saves its state and re-raises `CallDeferred` so the
+    orchestrator's own run pauses too (see `resolve_ask_user_answer` for
+    how that's resumed later).
+    """
+    await ctx.emit(SubAgentStartedEvent(agent_name=agent_name, instruction=instruction))
+
+    sub_agent = _DEFERRABLE_SUB_AGENTS[agent_name]
+    deps = _build_sub_agent_deps(agent_name, ctx.deps)
+    result = await sub_agent.run(instruction, deps=deps, usage=ctx.usage)
+
+    if isinstance(result.output, DeferredToolRequests):
+        sub_agent_key = str(uuid.uuid4())
+        ctx.deps.pending_sub_agent_runs[sub_agent_key] = PendingSubAgentRun(
+            agent_name=agent_name,
+            message_history=result.all_messages(),
+            requests=result.output,
+        )
+        call = result.output.calls[0]
+        question = result.output.metadata.get(call.tool_call_id, {}).get(
+            "question", "The agent needs more information:"
+        )
+        raise CallDeferred(
+            metadata={
+                "sub_agent_key": sub_agent_key,
+                "agent_name": agent_name,
+                "question": question,
+            }
+        )
+
+    await ctx.emit(SubAgentFinishedEvent(agent_name=agent_name, summary=result.output))
+    return result.output
+
+
 @agent.tool
 async def run_discovery_agent(ctx: RunContext[AgentDeps], instruction: str) -> str:
     """Delegate a task to the Discovery agent.
@@ -201,36 +250,7 @@ async def run_discovery_agent(ctx: RunContext[AgentDeps], instruction: str) -> s
         own run — see `resolve_ask_user_answer` for how it's resumed.
 
     """
-    await ctx.emit(
-        SubAgentStartedEvent(agent_name="discovery_agent", instruction=instruction)
-    )
-
-    deps = _build_sub_agent_deps("discovery_agent", ctx.deps)
-    result = await discovery_agent.run(instruction, deps=deps, usage=ctx.usage)
-
-    if isinstance(result.output, DeferredToolRequests):
-        sub_agent_key = str(uuid.uuid4())
-        ctx.deps.pending_sub_agent_runs[sub_agent_key] = PendingSubAgentRun(
-            agent_name="discovery_agent",
-            message_history=result.all_messages(),
-            requests=result.output,
-        )
-        call = result.output.calls[0]
-        question = result.output.metadata.get(call.tool_call_id, {}).get(
-            "question", "The agent needs more information:"
-        )
-        raise CallDeferred(
-            metadata={
-                "sub_agent_key": sub_agent_key,
-                "agent_name": "discovery_agent",
-                "question": question,
-            }
-        )
-
-    await ctx.emit(
-        SubAgentFinishedEvent(agent_name="discovery_agent", summary=result.output)
-    )
-    return result.output
+    return await _delegate(ctx, "discovery_agent", instruction)
 
 
 @agent.tool
@@ -250,21 +270,14 @@ async def run_mapping_agent(ctx: RunContext[AgentDeps], instruction: str) -> str
     str
         The Mapping agent's final summary of what it did.
 
+    Raises
+    ------
+    CallDeferred
+        If the Mapping agent paused on its own `ask_user` tool instead of
+        finishing — see `run_discovery_agent` for how this is resumed.
+
     """
-    await ctx.emit(
-        SubAgentStartedEvent(agent_name="mapping_agent", instruction=instruction)
-    )
-
-    deps = MappingDeps(
-        console=ctx.deps.console,
-        http_client=ctx.deps.http_client,
-    )
-    result = await mapping_agent.run(instruction, deps=deps, usage=ctx.usage)
-
-    await ctx.emit(
-        SubAgentFinishedEvent(agent_name="mapping_agent", summary=result.output)
-    )
-    return result.output
+    return await _delegate(ctx, "mapping_agent", instruction)
 
 
 @agent.tool
@@ -286,21 +299,14 @@ async def run_sync_agent(ctx: RunContext[AgentDeps], instruction: str) -> str:
     str
         The Sync agent's final summary of what it did.
 
+    Raises
+    ------
+    CallDeferred
+        If the Sync agent paused on its own `ask_user` tool instead of
+        finishing — see `run_discovery_agent` for how this is resumed.
+
     """
-    await ctx.emit(
-        SubAgentStartedEvent(agent_name="sync_agent", instruction=instruction)
-    )
-
-    deps = SyncDeps(
-        console=ctx.deps.console,
-        http_client=ctx.deps.http_client,
-    )
-    result = await sync_agent.run(instruction, deps=deps, usage=ctx.usage)
-
-    await ctx.emit(
-        SubAgentFinishedEvent(agent_name="sync_agent", summary=result.output)
-    )
-    return result.output
+    return await _delegate(ctx, "sync_agent", instruction)
 
 
 async def run_agent() -> None:

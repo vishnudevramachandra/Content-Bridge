@@ -7,7 +7,7 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import FunctionToolset
 
-from contentbridge.agents.discovery.deps import AgentDeps
+from contentbridge.agents.mapping.deps import AgentDeps
 from contentbridge.utils.wp_client import WPClient
 from contentbridge.utils.strapi_client import StrapiClient
 
