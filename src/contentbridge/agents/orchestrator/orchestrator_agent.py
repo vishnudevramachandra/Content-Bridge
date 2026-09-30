@@ -140,7 +140,6 @@ async def run_mapping_agent(ctx: RunContext[AgentDeps], instruction: str) -> str
     deps = MappingDeps(
         console=ctx.deps.console,
         http_client=ctx.deps.http_client,
-        search_api_key=ctx.deps.search_api_key,
     )
     result = await mapping_agent.run(instruction, deps=deps, usage=ctx.usage)
 
