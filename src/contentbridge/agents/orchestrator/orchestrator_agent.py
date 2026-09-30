@@ -1,7 +1,15 @@
 import asyncio
+import uuid
+from dataclasses import dataclass
+
 import httpx
 
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import (
+    Agent,
+    CallDeferred,
+    DeferredToolRequests,
+    RunContext,
+)
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -20,6 +28,7 @@ from contentbridge.agents.orchestrator.events import (
     SubAgentFinishedEvent,
     SubAgentStartedEvent,
 )
+from contentbridge.agents.orchestrator.pending import PendingSubAgentRun
 from contentbridge.utils.utils import get_env
 
 _INSTRUCTIONS = (
@@ -55,6 +64,11 @@ _INSTRUCTIONS = (
     "* After each delegated run, briefly summarize what happened before\n"
     "  deciding the next step, and give the user a final summary once\n"
     "  the requested work is done.\n"
+    "* A delegated agent may come back with a clarifying question\n"
+    "  instead of a summary (e.g. Discovery asking for a base URL). When\n"
+    "  that happens, the run pauses for a human to answer — you don't\n"
+    "  need to do anything about it yourself; you'll be resumed with\n"
+    "  that agent's summary once it's answered and the agent is done.\n"
 )
 
 # Module-level agent instance so it can be imported by the FastAPI app
@@ -75,7 +89,89 @@ agent = Agent[AgentDeps](
     instructions=_INSTRUCTIONS,
     capabilities=[FileOperations()],
     deps_type=AgentDeps,
+    # A delegation tool below can raise `CallDeferred` (when the sub-agent
+    # it called did) so the orchestrator's own run can pause too, ending
+    # with `DeferredToolRequests` instead of a final `str`.
+    output_type=[str, DeferredToolRequests],
 )
+
+# Sub-agents that currently support pausing to ask the human a question
+# (i.e. have an `ask_user` tool and `output_type=[str, DeferredToolRequests]`).
+# Only `discovery_agent` does today; `mapping_agent`/`sync_agent` always
+# return a plain `str`, so they never need this machinery.
+_DEFERRABLE_SUB_AGENTS = {"discovery_agent": discovery_agent}
+
+
+def _build_sub_agent_deps(agent_name: str, deps: AgentDeps) -> DiscoveryDeps:
+    """Build the dependency object for one of the deferrable sub-agents.
+
+    Only `discovery_agent` is deferrable today, so this only needs to
+    handle that one case; extend this when another sub-agent grows an
+    `ask_user` tool.
+    """
+    if agent_name == "discovery_agent":
+        return DiscoveryDeps(
+            console=deps.console,
+            http_client=deps.http_client,
+            search_api_key=deps.search_api_key,
+        )
+    raise ValueError(f"Unknown deferrable sub-agent: {agent_name!r}")
+
+
+@dataclass
+class SubAgentAnswerOutcome:
+    """Result of resuming a paused sub-agent with the human's answer."""
+
+    # True once the sub-agent is done (no more questions) — `text` is then
+    # its final summary, ready to resume the orchestrator with. False
+    # means the sub-agent asked another question — `text` is that
+    # question, and the orchestrator itself is *not* touched; it's still
+    # paused on the same delegation call.
+    finished: bool
+    text: str
+
+
+async def resolve_ask_user_answer(
+    deps: AgentDeps, sub_agent_key: str, answer: str
+) -> SubAgentAnswerOutcome:
+    """Resume whichever sub-agent is paused on `ask_user` with an answer.
+
+    Looks up the sub-agent's saved `message_history` + pending
+    `DeferredToolRequests` in `deps.pending_sub_agent_runs`, resumes its
+    run with the human's answer, and reports whether it's now finished
+    (so the caller can resume the orchestrator itself) or asked another
+    question (so the caller can just show that question again).
+    """
+    pending = deps.pending_sub_agent_runs[sub_agent_key]
+    sub_call = pending.requests.calls[0]
+    sub_results = pending.requests.build_results(calls={sub_call.tool_call_id: answer})
+
+    sub_agent = _DEFERRABLE_SUB_AGENTS[pending.agent_name]
+    sub_deps = _build_sub_agent_deps(pending.agent_name, deps)
+
+    result = await sub_agent.run(
+        message_history=pending.message_history,
+        deferred_tool_results=sub_results,
+        deps=sub_deps,
+    )
+
+    if isinstance(result.output, DeferredToolRequests):
+        # Still not done — save the new pending state under the same key
+        # and report the new question. The orchestrator's own paused run
+        # is untouched.
+        deps.pending_sub_agent_runs[sub_agent_key] = PendingSubAgentRun(
+            agent_name=pending.agent_name,
+            message_history=result.all_messages(),
+            requests=result.output,
+        )
+        next_call = result.output.calls[0]
+        question = result.output.metadata.get(next_call.tool_call_id, {}).get(
+            "question", "The agent needs more information:"
+        )
+        return SubAgentAnswerOutcome(finished=False, text=question)
+
+    del deps.pending_sub_agent_runs[sub_agent_key]
+    return SubAgentAnswerOutcome(finished=True, text=result.output)
 
 
 @agent.tool
@@ -97,17 +193,39 @@ async def run_discovery_agent(ctx: RunContext[AgentDeps], instruction: str) -> s
     str
         The Discovery agent's final summary of what it did.
 
+    Raises
+    ------
+    CallDeferred
+        If the Discovery agent paused on its own `ask_user` tool instead
+        of finishing. This propagates the pause up to the orchestrator's
+        own run — see `resolve_ask_user_answer` for how it's resumed.
+
     """
     await ctx.emit(
         SubAgentStartedEvent(agent_name="discovery_agent", instruction=instruction)
     )
 
-    deps = DiscoveryDeps(
-        console=ctx.deps.console,
-        http_client=ctx.deps.http_client,
-        search_api_key=ctx.deps.search_api_key,
-    )
+    deps = _build_sub_agent_deps("discovery_agent", ctx.deps)
     result = await discovery_agent.run(instruction, deps=deps, usage=ctx.usage)
+
+    if isinstance(result.output, DeferredToolRequests):
+        sub_agent_key = str(uuid.uuid4())
+        ctx.deps.pending_sub_agent_runs[sub_agent_key] = PendingSubAgentRun(
+            agent_name="discovery_agent",
+            message_history=result.all_messages(),
+            requests=result.output,
+        )
+        call = result.output.calls[0]
+        question = result.output.metadata.get(call.tool_call_id, {}).get(
+            "question", "The agent needs more information:"
+        )
+        raise CallDeferred(
+            metadata={
+                "sub_agent_key": sub_agent_key,
+                "agent_name": "discovery_agent",
+                "question": question,
+            }
+        )
 
     await ctx.emit(
         SubAgentFinishedEvent(agent_name="discovery_agent", summary=result.output)
@@ -194,6 +312,7 @@ async def run_agent() -> None:
             console=console,
             http_client=http_client,
             search_api_key=get_env("SEARCH_API_KEY"),
+            pending_sub_agent_runs={},
         )
 
         message_history: list[ModelMessage] | None = None
@@ -204,6 +323,37 @@ async def run_agent() -> None:
             result = await agent.run(
                 user_prompt, message_history=message_history, deps=deps
             )
+
+            # A delegated sub-agent may pause on `ask_user`, which bubbles
+            # up as the orchestrator's own `DeferredToolRequests` output.
+            # Keep resuming — first the sub-agent, then (once it's done)
+            # the orchestrator itself — until we get a final summary.
+            while isinstance(result.output, DeferredToolRequests):
+                orchestrator_history = result.all_messages()
+                orch_call = result.output.calls[0]
+                meta = result.output.metadata.get(orch_call.tool_call_id, {})
+                sub_agent_key = meta["sub_agent_key"]
+                question = meta.get("question", "The agent needs more information:")
+
+                # Keep asking on behalf of the same paused sub-agent until
+                # it stops asking and hands back a final summary.
+                outcome = None
+                while outcome is None or not outcome.finished:
+                    answer = console.input(f"[question] {question}\n>> ")
+                    outcome = await resolve_ask_user_answer(
+                        deps, sub_agent_key, answer
+                    )
+                    question = outcome.text
+
+                orch_results = result.output.build_results(
+                    calls={orch_call.tool_call_id: outcome.text}
+                )
+                result = await agent.run(
+                    message_history=orchestrator_history,
+                    deferred_tool_results=orch_results,
+                    deps=deps,
+                )
+
             console.print(Markdown(result.output))
 
             message_history = result.all_messages()

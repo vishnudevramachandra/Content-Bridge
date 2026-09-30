@@ -13,21 +13,29 @@ Architecture, in short:
   if so, injects a "system alert" into it via `AgentRun.enqueue()` — the
   orchestrator picks it up on its next model request. If no run is
   active, the tick is simply skipped.
+* A sub-agent (e.g. Discovery) can pause mid-task to ask the human a
+  question via its own `ask_user` tool. That pause bubbles up through the
+  orchestrator's delegation tool as `DeferredToolRequests`, which
+  `POST /api/chat` surfaces as a `question` SSE event instead of `final`.
+  `POST /api/answer` resumes the paused sub-agent with the human's
+  answer, and — once the sub-agent is done — resumes the orchestrator
+  with that summary, continuing the same SSE streaming as normal.
 """
 
 import asyncio
 import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from rich.console import Console
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, DeferredToolRequests, DeferredToolResults
 from pydantic_ai.messages import (
     EnqueuedMessagesEvent,
     FunctionToolCallEvent,
@@ -47,10 +55,22 @@ from contentbridge.agents.orchestrator.events import (
 )
 from contentbridge.agents.orchestrator.orchestrator_agent import (
     agent as orchestrator_agent,
+    resolve_ask_user_answer,
 )
+from contentbridge.agents.orchestrator.pending import PendingSubAgentRun
 from contentbridge.utils.utils import get_env
 
 _PERIODIC_ALERT_INTERVAL_SECONDS = 5
+
+
+@dataclass
+class PendingOrchestratorRun:
+    """The orchestrator's own paused state, while a sub-agent's question
+    (bubbled up through a delegation tool) is waiting on a human answer.
+    """
+
+    message_history: list[ModelMessage]
+    requests: DeferredToolRequests
 
 
 class ChatState:
@@ -59,20 +79,37 @@ class ChatState:
     This is a single global conversation (no per-user/session handling
     yet), which matches the original prototype. `active_run` is set for
     the duration of one `/api/chat` request so the periodic background
-    task can inject into it.
+    task can inject into it. `pending_sub_agent_runs` and
+    `pending_orchestrator` track at most one outstanding human question
+    at a time — also consistent with there being a single conversation.
     """
 
     def __init__(self) -> None:
         self.message_history: list[ModelMessage] = []
         self.active_run: AgentRun[AgentDeps, str] | None = None
+        self.pending_sub_agent_runs: dict[str, PendingSubAgentRun] = {}
+        self.pending_orchestrator: PendingOrchestratorRun | None = None
 
 
 chat_state = ChatState()
 console = Console()
 
 
+def _build_deps() -> AgentDeps:
+    return AgentDeps(
+        console=console,
+        http_client=app.state.http_client,
+        search_api_key=get_env("SEARCH_API_KEY"),
+        pending_sub_agent_runs=chat_state.pending_sub_agent_runs,
+    )
+
+
 class UserPromptRequest(BaseModel):
     message: str
+
+
+class UserAnswerRequest(BaseModel):
+    answer: str
 
 
 def _event_to_sse(event: object) -> str | None:
@@ -134,18 +171,33 @@ def _event_to_sse(event: object) -> str | None:
 
 
 async def _stream_orchestrator_run(
-    user_prompt: str, deps: AgentDeps
+    deps: AgentDeps,
+    *,
+    user_prompt: str | None = None,
+    message_history: list[ModelMessage] | None = None,
+    deferred_tool_results: DeferredToolResults | None = None,
 ) -> AsyncGenerator[str]:
-    """Drive one orchestrator run via `agent.iter()`, yielding SSE lines.
+    """Drive one orchestrator run (fresh or resumed) via `agent.iter()`.
 
     Using `agent.iter()` (rather than the simpler `run_stream_events()`)
     is what lets us hand the live `AgentRun` to `chat_state.active_run`,
     so the periodic background task can call `.enqueue()` on it.
+
+    Pass `user_prompt=` for a normal new chat turn (uses
+    `chat_state.message_history` unless `message_history=` overrides it).
+    Pass `deferred_tool_results=` together with `message_history=` (the
+    exact history of the paused run) to resume after a sub-agent's
+    question has been answered — no `user_prompt` in that case.
     """
+    history = (
+        message_history if message_history is not None else chat_state.message_history
+    )
+
     async with orchestrator_agent.iter(
         user_prompt,
         deps=deps,
-        message_history=chat_state.message_history,
+        message_history=history,
+        deferred_tool_results=deferred_tool_results,
     ) as agent_run:
         chat_state.active_run = agent_run
         try:
@@ -162,9 +214,33 @@ async def _stream_orchestrator_run(
             chat_state.active_run = None
 
         result = agent_run.result
-        if result is not None:
+        if result is None:
+            return
+
+        if isinstance(result.output, DeferredToolRequests):
+            # A sub-agent asked a question that bubbled all the way up;
+            # pause the orchestrator here instead of finishing normally.
+            orch_call = result.output.calls[0]
+            meta = result.output.metadata.get(orch_call.tool_call_id, {})
+            chat_state.pending_orchestrator = PendingOrchestratorRun(
+                message_history=result.all_messages(),
+                requests=result.output,
+            )
+            yield _sse_line(
+                {
+                    "type": "question",
+                    "agent_name": meta.get("agent_name"),
+                    "question": meta.get("question"),
+                }
+            )
+        else:
             chat_state.message_history = result.all_messages()
-            yield f"data: {json.dumps({'type': 'final', 'output': result.output})}\n\n"
+            chat_state.pending_orchestrator = None
+            yield _sse_line({"type": "final", "output": result.output})
+
+
+def _sse_line(payload: dict[str, object]) -> str:
+    return f"data: {json.dumps(payload, default=str)}\n\n"
 
 
 async def _periodic_alert_worker() -> None:
@@ -211,25 +287,93 @@ async def chat(payload: UserPromptRequest) -> StreamingResponse:
     text = payload.message.strip()
     if not text:
         return StreamingResponse(
-            iter([f"data: {json.dumps({'type': 'error', 'detail': 'empty message'})}\n\n"]),
+            iter([_sse_line({"type": "error", "detail": "empty message"})]),
             media_type="text/event-stream",
             status_code=400,
         )
-
-    deps = AgentDeps(
-        console=console,
-        http_client=app.state.http_client,
-        search_api_key=get_env("SEARCH_API_KEY"),
-    )
+    if chat_state.pending_orchestrator is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="A sub-agent question is pending; answer it via /api/answer first.",
+        )
 
     return StreamingResponse(
-        _stream_orchestrator_run(text, deps), media_type="text/event-stream"
+        _stream_orchestrator_run(_build_deps(), user_prompt=text),
+        media_type="text/event-stream",
     )
+
+
+@app.post("/api/answer")
+async def answer(payload: UserAnswerRequest) -> StreamingResponse:
+    pending = chat_state.pending_orchestrator
+    if pending is None:
+        raise HTTPException(status_code=400, detail="No question is pending.")
+
+    orch_call = pending.requests.calls[0]
+    meta = pending.requests.metadata.get(orch_call.tool_call_id, {})
+    sub_agent_key = meta.get("sub_agent_key")
+    if sub_agent_key is None:
+        raise HTTPException(
+            status_code=500, detail="Pending question is missing its sub-agent key."
+        )
+
+    deps = _build_deps()
+    outcome = await resolve_ask_user_answer(
+        deps, sub_agent_key, payload.answer.strip()
+    )
+
+    if not outcome.finished:
+        # The sub-agent asked another question. The orchestrator's own
+        # paused run is untouched — surface just the new question.
+        async def one_more_question() -> AsyncGenerator[str]:
+            yield _sse_line(
+                {
+                    "type": "question",
+                    "agent_name": meta.get("agent_name"),
+                    "question": outcome.text,
+                }
+            )
+
+        return StreamingResponse(
+            one_more_question(), media_type="text/event-stream"
+        )
+
+    # The sub-agent is done — resume the orchestrator with its summary as
+    # the delegation tool's result, and keep streaming as normal.
+    #
+    # Note: resuming a deferred tool call does *not* re-run
+    # `run_discovery_agent`'s body — the framework substitutes the
+    # answer directly as that call's result — so the `SubAgentFinishedEvent`
+    # emitted from inside that tool never fires for this path. We emit the
+    # equivalent SSE line by hand here instead, since we already have
+    # everything it needs.
+    orch_results = pending.requests.build_results(
+        calls={orch_call.tool_call_id: outcome.text}
+    )
+
+    async def resume_after_answer() -> AsyncGenerator[str]:
+        yield _sse_line(
+            {
+                "type": "sub_agent_finished",
+                "agent_name": meta.get("agent_name"),
+                "summary": outcome.text,
+            }
+        )
+        async for sse_line in _stream_orchestrator_run(
+            deps,
+            message_history=pending.message_history,
+            deferred_tool_results=orch_results,
+        ):
+            yield sse_line
+
+    return StreamingResponse(resume_after_answer(), media_type="text/event-stream")
 
 
 @app.post("/api/reset")
 async def reset() -> dict[str, str]:
     chat_state.message_history = []
+    chat_state.pending_orchestrator = None
+    chat_state.pending_sub_agent_runs.clear()
     return {"status": "reset"}
 
 
@@ -238,6 +382,7 @@ async def status() -> dict[str, object]:
     return {
         "run_active": chat_state.active_run is not None,
         "history_length": len(chat_state.message_history),
+        "waiting_for_answer": chat_state.pending_orchestrator is not None,
     }
 
 

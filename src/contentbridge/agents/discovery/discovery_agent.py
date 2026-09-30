@@ -1,7 +1,7 @@
 import asyncio
 import httpx
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, CallDeferred, DeferredToolRequests
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -86,9 +86,14 @@ _INSTRUCTIONS = (
     "* 7. AGENT CONSTRAINTS: Follow instructions exactly, do not add\n"
     "  extra features. Prefer the standard library over external\n"
     "  dependencies unless specified. Explore the project structure\n"
-    "  before planning. If requirements are unclear, ask a concise\n"
-    "  clarification question. Provide a brief summary of your\n"
-    "  implementation. Use the available tools.\n"
+    "  before planning. If requirements are unclear, use the ask_user()\n"
+    "  tool to ask a single, concise clarification question and wait\n"
+    "  for the answer before continuing — don't guess. Only ask when\n"
+    "  something is genuinely ambiguous or missing; don't ask about\n"
+    "  things you can figure out yourself from the schema or files.\n"
+    "  When you're finished, provide a brief summary of what you did;\n"
+    "  that summary is handed back to whoever asked you to do this\n"
+    "  work. Use the available tools.\n"
 )
 
 # Module-level agent instance so it can be imported and delegated to
@@ -115,7 +120,27 @@ agent = Agent[AgentDeps](
         # Skills(),
     ],
     deps_type=AgentDeps,
+    # `DeferredToolRequests` lets a run end early (via `ask_user` raising
+    # `CallDeferred` below) instead of only ever producing a final `str`.
+    output_type=[str, DeferredToolRequests],
 )
+
+
+@agent.tool_plain
+def ask_user(question: str) -> str:
+    """Ask the human a clarifying question and pause until they answer.
+
+    Calling this stops the current run: whoever is driving this agent
+    (e.g. the orchestrator) sees a `DeferredToolRequests` result and must
+    resume the run later with the human's answer as this tool's result.
+
+    Parameters
+    ----------
+    question : str
+        A single, concise question for the human.
+
+    """
+    raise CallDeferred(metadata={"question": question})
 
 
 async def run_agent() -> None:
@@ -137,6 +162,27 @@ async def run_agent() -> None:
             result = await agent.run(
                 user_prompt, message_history=message_history, deps=deps
             )
+
+            # `ask_user()` can defer the run instead of returning a plain
+            # string; keep resuming with the human's answer until the
+            # agent produces one.
+            while isinstance(result.output, DeferredToolRequests):
+                answers: dict[str, str] = {}
+                for call in result.output.calls:
+                    question = result.output.metadata.get(
+                        call.tool_call_id, {}
+                    ).get("question", "The agent needs more information:")
+                    answers[call.tool_call_id] = console.input(
+                        f"[question] {question}\n>> "
+                    )
+                deferred_results = result.output.build_results(calls=answers)
+
+                result = await agent.run(
+                    message_history=result.all_messages(),
+                    deferred_tool_results=deferred_results,
+                    deps=deps,
+                )
+
             console.print(Markdown(result.output))
 
             message_history = result.all_messages()
