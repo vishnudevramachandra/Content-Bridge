@@ -115,8 +115,8 @@ agent = Agent[AgentDeps](
 )
 
 
-@agent.tool_plain
-def ask_user(question: str) -> str:
+@agent.tool
+def ask_user(ctx: RunContext[AgentDeps], question: str) -> str:
     """Ask the human a question and pause until they answer.
 
     Use this both for your own direct questions (e.g. a missing Strapi
@@ -134,6 +134,7 @@ def ask_user(question: str) -> str:
         asking.
 
     """
+    ctx.deps.console.log(f"[ask_user] {question!r}")
     raise CallDeferred(metadata={"question": question})
 
 
@@ -286,6 +287,10 @@ async def _delegate(
         question = result.output.metadata.get(call.tool_call_id, {}).get(
             "question", "The agent needs more information:"
         )
+        ctx.deps.console.log(
+            f"[paused] {agent_name} (key={sub_agent_key}) needs clarification: "
+            f"{question!r}"
+        )
         return (
             f"{agent_name} needs clarification before it can continue:\n\n"
             f"{question!r}\n\n"
@@ -340,12 +345,20 @@ async def answer_sub_agent_question(
         )
 
     agent_name = ctx.deps.pending_sub_agent_runs[sub_agent_key].agent_name
+    ctx.deps.console.log(
+        f"[resuming] {agent_name} (key={sub_agent_key}) with answer: {answer!r}"
+    )
     outcome = await resolve_ask_user_answer(ctx.deps, sub_agent_key, answer)
 
     if outcome.finished:
+        ctx.deps.console.log(f"[resumed] {agent_name} (key={sub_agent_key}) finished")
         await ctx.emit(SubAgentFinishedEvent(agent_name=agent_name, summary=outcome.text))
         return f"{agent_name} is done:\n\n{outcome.text}"
 
+    ctx.deps.console.log(
+        f"[still paused] {agent_name} (key={sub_agent_key}) needs more: "
+        f"{outcome.text!r}"
+    )
     return (
         f"{agent_name} still needs clarification:\n\n{outcome.text}\n\n"
         "Relay this to the user via `ask_user`, then call "
