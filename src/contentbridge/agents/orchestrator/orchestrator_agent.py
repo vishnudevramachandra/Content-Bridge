@@ -8,7 +8,9 @@ from pydantic_ai import (
     Agent,
     CallDeferred,
     DeferredToolRequests,
+    ModelRetry,
     RunContext,
+    UnexpectedModelBehavior,
 )
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.openai import OpenAIResponsesModel
@@ -64,11 +66,26 @@ _INSTRUCTIONS = (
     "* After each delegated run, briefly summarize what happened before\n"
     "  deciding the next step, and give the user a final summary once\n"
     "  the requested work is done.\n"
-    "* A delegated agent may come back with a clarifying question\n"
-    "  instead of a summary (e.g. Discovery asking for a base URL). When\n"
-    "  that happens, the run pauses for a human to answer — you don't\n"
-    "  need to do anything about it yourself; you'll be resumed with\n"
-    "  that agent's summary once it's answered and the agent is done.\n"
+    "\n"
+    "WHEN A SUB-AGENT NEEDS CLARIFICATION:\n"
+    "* A delegation tool (run_discovery_agent/run_mapping_agent/\n"
+    "  run_sync_agent) may come back saying the sub-agent is paused on a\n"
+    "  question instead of a summary, with a sub_agent_key. When that\n"
+    "  happens, relay that question to the human yourself using\n"
+    "  ask_user — you may rephrase it, but make clear which agent is\n"
+    "  asking (e.g. \"mapping_agent would like to know: ...\").\n"
+    "* Once the human answers ask_user, decide for yourself whether their\n"
+    "  reply actually answers the pending question. If it does, call\n"
+    "  answer_sub_agent_question with that sub_agent_key and their answer\n"
+    "  to resume the sub-agent. If it doesn't (e.g. they asked you\n"
+    "  something unrelated, or didn't understand the question), respond\n"
+    "  to them yourself instead — don't forward it to the sub-agent;\n"
+    "  call ask_user again once you've addressed their side question, to\n"
+    "  get back to the pending one. The sub-agent just stays paused\n"
+    "  until you do call answer_sub_agent_question with a real answer.\n"
+    "* answer_sub_agent_question may report the sub-agent is still not\n"
+    "  satisfied (another question) — relay that one with ask_user too\n"
+    "  and repeat.\n"
 )
 
 # Module-level agent instance so it can be imported by the FastAPI app
@@ -89,11 +106,36 @@ agent = Agent[AgentDeps](
     instructions=_INSTRUCTIONS,
     capabilities=[FileOperations()],
     deps_type=AgentDeps,
-    # A delegation tool below can raise `CallDeferred` (when the sub-agent
-    # it called did) so the orchestrator's own run can pause too, ending
-    # with `DeferredToolRequests` instead of a final `str`.
+    # `ask_user` below can raise `CallDeferred`, ending the run with
+    # `DeferredToolRequests` instead of a final `str` — the *only* way
+    # this agent's run ever pauses, whether for its own direct question
+    # or one it's relaying from a paused sub-agent (see `_delegate` /
+    # `answer_sub_agent_question`).
     output_type=[str, DeferredToolRequests],
 )
+
+
+@agent.tool_plain
+def ask_user(question: str) -> str:
+    """Ask the human a question and pause until they answer.
+
+    Use this both for your own direct questions (e.g. a missing Strapi
+    product ID) and to relay a clarifying question from a delegated
+    sub-agent (see `answer_sub_agent_question`). Calling this stops the
+    current run: whoever is driving this agent sees a
+    `DeferredToolRequests` result and must resume the run later with the
+    human's answer as this tool's result.
+
+    Parameters
+    ----------
+    question : str
+        A single, concise question for the human. When relaying a
+        sub-agent's question, phrase it so it's clear which agent is
+        asking.
+
+    """
+    raise CallDeferred(metadata={"question": question})
+
 
 # Every sub-agent has an `ask_user` tool and `output_type=[str,
 # DeferredToolRequests]`, so any of them can pause to ask the human a
@@ -150,19 +192,41 @@ async def resolve_ask_user_answer(
     run with the human's answer, and reports whether it's now finished
     (so the caller can resume the orchestrator itself) or asked another
     question (so the caller can just show that question again).
+
+    The caller (`answer_sub_agent_question`) only invokes this once the
+    *orchestrator's own* model has judged `answer` to actually address
+    the pending question — but a sub-agent's model can still choke on a
+    bad answer (e.g. `UnexpectedModelBehavior` after exhausting its
+    output retries). Rather than let that crash the whole run, this
+    treats it the same as "the sub-agent needs to ask again": the
+    pending state is left untouched (still keyed by `sub_agent_key`) and
+    `finished=False` is reported with an explanatory message instead of
+    the sub-agent's own next question.
     """
     pending = deps.pending_sub_agent_runs[sub_agent_key]
     sub_call = pending.requests.calls[0]
+    original_question = pending.requests.metadata.get(sub_call.tool_call_id, {}).get(
+        "question", "the pending question"
+    )
     sub_results = pending.requests.build_results(calls={sub_call.tool_call_id: answer})
 
     sub_agent = _DEFERRABLE_SUB_AGENTS[pending.agent_name]
     sub_deps = _build_sub_agent_deps(pending.agent_name, deps)
 
-    result = await sub_agent.run(
-        message_history=pending.message_history,
-        deferred_tool_results=sub_results,
-        deps=sub_deps,
-    )
+    try:
+        result = await sub_agent.run(
+            message_history=pending.message_history,
+            deferred_tool_results=sub_results,
+            deps=sub_deps,
+        )
+    except UnexpectedModelBehavior:
+        return SubAgentAnswerOutcome(
+            finished=False,
+            text=(
+                f"That didn't read as an answer to {original_question!r} — "
+                "please answer it directly, or explain what's unclear about it."
+            ),
+        )
 
     if isinstance(result.output, DeferredToolRequests):
         # Still not done — save the new pending state under the same key
@@ -186,19 +250,30 @@ async def resolve_ask_user_answer(
 async def _delegate(
     ctx: RunContext[AgentDeps], agent_name: str, instruction: str
 ) -> str:
-    """Run one sub-agent to completion, or pause the orchestrator with it.
+    """Run one sub-agent to completion, or report that it's paused.
 
-    Shared body for every `run_*_agent` delegation tool below: emits
-    progress events, runs the sub-agent, and — if *it* paused on its own
-    `ask_user` — saves its state and re-raises `CallDeferred` so the
-    orchestrator's own run pauses too (see `resolve_ask_user_answer` for
-    how that's resumed later).
+    Shared body for every `run_*_agent` delegation tool below. Unlike
+    the sub-agent's own `ask_user` (which stops its run via
+    `CallDeferred`), this never pauses the *orchestrator's* run itself —
+    doing that unconditionally short-circuited the orchestrator's own
+    reasoning about whatever the human typed next (see
+    `answer_sub_agent_question` for why that was a problem). Instead, if
+    the sub-agent paused, this saves its state and returns a message
+    telling the orchestrator's own model to relay the question via its
+    own `ask_user` and resume the sub-agent later via
+    `answer_sub_agent_question`.
+
+    A sub-agent can also fail outright while running (`UnexpectedModelBehavior`);
+    that's reported back as text too, rather than crashing this run.
     """
     await ctx.emit(SubAgentStartedEvent(agent_name=agent_name, instruction=instruction))
 
     sub_agent = _DEFERRABLE_SUB_AGENTS[agent_name]
     deps = _build_sub_agent_deps(agent_name, ctx.deps)
-    result = await sub_agent.run(instruction, deps=deps, usage=ctx.usage)
+    try:
+        result = await sub_agent.run(instruction, deps=deps, usage=ctx.usage)
+    except UnexpectedModelBehavior as e:
+        return f"{agent_name} failed to complete this task: {e}"
 
     if isinstance(result.output, DeferredToolRequests):
         sub_agent_key = str(uuid.uuid4())
@@ -211,16 +286,72 @@ async def _delegate(
         question = result.output.metadata.get(call.tool_call_id, {}).get(
             "question", "The agent needs more information:"
         )
-        raise CallDeferred(
-            metadata={
-                "sub_agent_key": sub_agent_key,
-                "agent_name": agent_name,
-                "question": question,
-            }
+        return (
+            f"{agent_name} needs clarification before it can continue:\n\n"
+            f"{question!r}\n\n"
+            "Relay this to the user with `ask_user` (you may rephrase it, but "
+            f"make clear it's on behalf of {agent_name}). Once they reply with "
+            "something that actually answers it, call "
+            f"`answer_sub_agent_question(sub_agent_key={sub_agent_key!r}, "
+            "answer=<their answer>)` to resume it. If their reply doesn't "
+            "answer it — e.g. a side question, or something unrelated — "
+            "respond to them yourself instead; don't call "
+            "`answer_sub_agent_question` until you have a real answer."
         )
 
     await ctx.emit(SubAgentFinishedEvent(agent_name=agent_name, summary=result.output))
     return result.output
+
+
+@agent.tool
+async def answer_sub_agent_question(
+    ctx: RunContext[AgentDeps], sub_agent_key: str, answer: str
+) -> str:
+    """Resume a sub-agent that's paused waiting on its `ask_user` question.
+
+    Only call this once the human's reply (to a question you relayed via
+    your own `ask_user`) actually answers the sub-agent's pending
+    question. If it doesn't — they asked something unrelated, or
+    clearly didn't understand the question — don't call this; respond
+    to them yourself instead (`ask_user` again if needed). The
+    sub-agent just stays paused until you do call this with a real
+    answer.
+
+    Parameters
+    ----------
+    sub_agent_key : str
+        The id given to you in the delegation tool's "needs
+        clarification" message.
+    answer : str
+        The human's answer, handed back as the sub-agent's `ask_user`
+        tool result.
+
+    Returns
+    -------
+    str
+        The sub-agent's final summary if that answer finished it, or a
+        message saying it still needs clarification (possibly because
+        its model couldn't parse that answer) — in that case, relay the
+        new text with `ask_user` and call this again once answered.
+    """
+    if sub_agent_key not in ctx.deps.pending_sub_agent_runs:
+        raise ModelRetry(
+            f"No sub-agent is currently paused under sub_agent_key={sub_agent_key!r}."
+        )
+
+    agent_name = ctx.deps.pending_sub_agent_runs[sub_agent_key].agent_name
+    outcome = await resolve_ask_user_answer(ctx.deps, sub_agent_key, answer)
+
+    if outcome.finished:
+        await ctx.emit(SubAgentFinishedEvent(agent_name=agent_name, summary=outcome.text))
+        return f"{agent_name} is done:\n\n{outcome.text}"
+
+    return (
+        f"{agent_name} still needs clarification:\n\n{outcome.text}\n\n"
+        "Relay this to the user via `ask_user`, then call "
+        f"`answer_sub_agent_question(sub_agent_key={sub_agent_key!r}, "
+        "answer=...)` again once they reply."
+    )
 
 
 @agent.tool
@@ -240,14 +371,10 @@ async def run_discovery_agent(ctx: RunContext[AgentDeps], instruction: str) -> s
     Returns
     -------
     str
-        The Discovery agent's final summary of what it did.
-
-    Raises
-    ------
-    CallDeferred
-        If the Discovery agent paused on its own `ask_user` tool instead
-        of finishing. This propagates the pause up to the orchestrator's
-        own run — see `resolve_ask_user_answer` for how it's resumed.
+        The Discovery agent's final summary of what it did, or — if it
+        paused on its own `ask_user` instead of finishing — a message
+        telling you to relay its question and resume it with
+        `answer_sub_agent_question`.
 
     """
     return await _delegate(ctx, "discovery_agent", instruction)
@@ -268,13 +395,10 @@ async def run_mapping_agent(ctx: RunContext[AgentDeps], instruction: str) -> str
     Returns
     -------
     str
-        The Mapping agent's final summary of what it did.
-
-    Raises
-    ------
-    CallDeferred
-        If the Mapping agent paused on its own `ask_user` tool instead of
-        finishing — see `run_discovery_agent` for how this is resumed.
+        The Mapping agent's final summary of what it did, or — if it
+        paused on its own `ask_user` instead of finishing — a message
+        telling you to relay its question and resume it with
+        `answer_sub_agent_question`.
 
     """
     return await _delegate(ctx, "mapping_agent", instruction)
@@ -297,13 +421,10 @@ async def run_sync_agent(ctx: RunContext[AgentDeps], instruction: str) -> str:
     Returns
     -------
     str
-        The Sync agent's final summary of what it did.
-
-    Raises
-    ------
-    CallDeferred
-        If the Sync agent paused on its own `ask_user` tool instead of
-        finishing — see `run_discovery_agent` for how this is resumed.
+        The Sync agent's final summary of what it did, or — if it
+        paused on its own `ask_user` instead of finishing — a message
+        telling you to relay its question and resume it with
+        `answer_sub_agent_question`.
 
     """
     return await _delegate(ctx, "sync_agent", instruction)
@@ -330,33 +451,27 @@ async def run_agent() -> None:
                 user_prompt, message_history=message_history, deps=deps
             )
 
-            # A delegated sub-agent may pause on `ask_user`, which bubbles
-            # up as the orchestrator's own `DeferredToolRequests` output.
-            # Keep resuming — first the sub-agent, then (once it's done)
-            # the orchestrator itself — until we get a final summary.
+            # The orchestrator's own `ask_user` is the *only* way its run
+            # ever pauses now — both for its own direct questions and to
+            # relay a sub-agent's (see `_delegate` /
+            # `answer_sub_agent_question`). Whatever the human types next
+            # is just a normal answer to *that* tool call; the
+            # orchestrator's own model decides what to do with it (answer
+            # a sub-agent's question, ask again, or respond directly) on
+            # the next turn — this loop doesn't need to know which.
             while isinstance(result.output, DeferredToolRequests):
-                orchestrator_history = result.all_messages()
-                orch_call = result.output.calls[0]
-                meta = result.output.metadata.get(orch_call.tool_call_id, {})
-                sub_agent_key = meta["sub_agent_key"]
-                question = meta.get("question", "The agent needs more information:")
-
-                # Keep asking on behalf of the same paused sub-agent until
-                # it stops asking and hands back a final summary.
-                outcome = None
-                while outcome is None or not outcome.finished:
-                    answer = console.input(f"[question] {question}\n>> ")
-                    outcome = await resolve_ask_user_answer(
-                        deps, sub_agent_key, answer
-                    )
-                    question = outcome.text
-
-                orch_results = result.output.build_results(
-                    calls={orch_call.tool_call_id: outcome.text}
+                history = result.all_messages()
+                call = result.output.calls[0]
+                question = result.output.metadata.get(call.tool_call_id, {}).get(
+                    "question", "The agent needs more information:"
+                )
+                answer = console.input(f"[question] {question}\n>> ")
+                deferred_results = result.output.build_results(
+                    calls={call.tool_call_id: answer}
                 )
                 result = await agent.run(
-                    message_history=orchestrator_history,
-                    deferred_tool_results=orch_results,
+                    message_history=history,
+                    deferred_tool_results=deferred_results,
                     deps=deps,
                 )
 
