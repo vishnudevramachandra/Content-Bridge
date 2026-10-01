@@ -1,6 +1,8 @@
 import asyncio
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal
 
 import httpx
 
@@ -31,7 +33,10 @@ from contentbridge.agents.orchestrator.events import (
     SubAgentStartedEvent,
 )
 from contentbridge.agents.orchestrator.pending import PendingSubAgentRun
+from contentbridge.utils.ontology import parse_mapping_ontology, parse_schema_ontology
 from contentbridge.utils.utils import get_env
+
+_SANDBOX_DIR = Path("sandbox")
 
 _INSTRUCTIONS = (
     "You are the Orchestrator Agent for Content-Bridge.\n"
@@ -92,6 +97,23 @@ _INSTRUCTIONS = (
     "* answer_sub_agent_question may report the sub-agent is still not "
     "satisfied (another question) — relay that one with ask_user too "
     "and repeat.\n"
+    "\n"
+    "VISUALIZING THE ONTOLOGIES:\n"
+    "* When the user asks to see, visualize, or summarize either "
+    "ontology — or asks something like 'show me how Product maps to "
+    "Post' — call get_ontology_data for the scope they're asking "
+    "about (schema, mapping, or both) rather than read_file-ing the "
+    "raw Turtle yourself.\n"
+    "* Respond with a ```mermaid fenced code block (a classDiagram for "
+    "the schema — classes and their properties — or a flowchart/graph "
+    "for mappings — subject -> object edges labelled with the "
+    "predicate and confidence) built from only the parts relevant to "
+    "what they asked, trimmed for readability rather than dumping "
+    "everything get_ontology_data returned. Keep any accompanying "
+    "prose short; the diagram is the answer.\n"
+    "* If get_ontology_data reports a file hasn't been generated yet, "
+    "say so instead of inventing a diagram — Discovery/Mapping need to "
+    "run first.\n"
 )
 
 # Module-level agent instance so it can be imported by the FastAPI app
@@ -142,6 +164,56 @@ def ask_user(ctx: RunContext[AgentDeps], question: str) -> str:
     """
     ctx.deps.console.log(f"[ask_user] {question!r}")
     raise CallDeferred(metadata={"question": question})
+
+
+@agent.tool
+def get_ontology_data(
+    ctx: RunContext[AgentDeps], scope: Literal["schema", "mapping", "both"]
+) -> dict[str, Any]:
+    """Fetch the ontologies as structured JSON instead of raw Turtle text.
+
+    Use this (rather than read_file) when the user wants to see,
+    visualize, or get a summary of either ontology — the structured
+    shape is what you build a trimmed mermaid diagram from (see
+    VISUALIZING THE ONTOLOGIES in your instructions).
+
+    Parameters
+    ----------
+    scope : {"schema", "mapping", "both"}
+        Which ontology to fetch: "schema" for schema-ontology.ttl
+        (classes/properties per system), "mapping" for
+        mapping-ontology.ttl (SSSOM mappings with confidence), or
+        "both".
+
+    Returns
+    -------
+    dict
+        `{"schema": {...}}`, `{"mapping": {"mappings": [...]}}`, or
+        both, depending on `scope`. A file that hasn't been generated
+        yet is reported as `{"error": "<file> has not been generated "
+        "yet"}` under that key instead of raising.
+
+    """
+    ctx.deps.console.log(f"[get_ontology_data] scope={scope!r}")
+    result: dict[str, Any] = {}
+
+    if scope in ("schema", "both"):
+        path = _SANDBOX_DIR / "schema-ontology.ttl"
+        result["schema"] = (
+            parse_schema_ontology(path)
+            if path.exists()
+            else {"error": "schema-ontology.ttl has not been generated yet"}
+        )
+
+    if scope in ("mapping", "both"):
+        path = _SANDBOX_DIR / "mapping-ontology.ttl"
+        result["mapping"] = (
+            {"mappings": parse_mapping_ontology(path)}
+            if path.exists()
+            else {"error": "mapping-ontology.ttl has not been generated yet"}
+        )
+
+    return result
 
 
 # Every sub-agent has an `ask_user` tool and `output_type=[str,
