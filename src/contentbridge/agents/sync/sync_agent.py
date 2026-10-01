@@ -16,9 +16,9 @@ from contentbridge.utils.utils import get_env
 
 _INSTRUCTIONS = (
     "You are a Sync Agent for Content-Bridge.\n"
-    "Read mapping-ontology.ttl to understand mappings (pay particular"
+    "Read mapping-ontology.ttl to understand mappings (pay particular "
     "attention to links like owl:equivalentProperty).\n"
-    "When given a Strapi product ID, fetch it, then create/update"
+    "When given a Strapi product ID, fetch it, then create/update "
     "the WP post using ontology mappings — not hardcoded rules.\n"
     "Derive custom fields (e.g., slug) from mapped ontology properties.\n"
     "If the Strapi product ID is missing or you hit an ambiguity you "
