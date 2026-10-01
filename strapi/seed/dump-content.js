@@ -45,6 +45,11 @@ async function dumpCertifications(app) {
     name: c.name,
     issuingBody: c.issuingBody,
     description: c.description,
+    // Informational only: a snapshot of whatever's live right now.
+    // seed-content.js never reads this back — it always computes
+    // endOfThisYear() fresh at seed time, so this value isn't consumed on
+    // the next seed.sh run and editing it here has no effect.
+    ExpiryDate: c.ExpiryDate,
   }));
 }
 

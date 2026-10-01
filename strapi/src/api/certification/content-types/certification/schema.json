@@ -23,6 +23,9 @@
     "description": {
       "type": "text"
     },
+    "ExpiryDate": {
+      "type": "date"
+    },
     "products": {
       "type": "relation",
       "relation": "manyToMany",
