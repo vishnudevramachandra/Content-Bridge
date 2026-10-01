@@ -36,6 +36,15 @@ function toBlocks(text) {
   return [{ type: 'paragraph', children: [{ type: 'text', text }] }];
 }
 
+// Certifications don't carry a fixed expiry date in catalog-seed.json — a
+// hardcoded date would eventually land in the past and stop being useful
+// for exercising the expiry-check pipeline. Computed relative to whenever
+// the seed actually runs instead, so a fresh volume always starts with
+// certifications expiring at the end of that year.
+function endOfThisYear() {
+  return `${new Date().getFullYear()}-12-31`;
+}
+
 async function seedCertifications(app) {
   console.log('==> Seeding certifications');
   const documentIdByName = {};
@@ -45,6 +54,7 @@ async function seedCertifications(app) {
         name: cert.name,
         issuingBody: cert.issuingBody,
         description: cert.description,
+        ExpiryDate: endOfThisYear(),
       },
     });
     await app.documents('api::certification.certification').publish({ documentId: doc.documentId });

@@ -8,3 +8,4 @@ from rich.console import Console
 class AgentDeps:
     console: Console
     http_client: httpx.AsyncClient
+    search_api_key: str

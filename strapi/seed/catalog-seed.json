@@ -3,12 +3,14 @@
     {
       "name": "UL Listed",
       "issuingBody": "Underwriters Laboratories",
-      "description": "Product tested and certified to UL safety standards."
+      "description": "Product tested and certified to UL safety standards.",
+      "ExpiryDate": "2026-12-31"
     },
     {
       "name": "CE Marked",
       "issuingBody": "European Union (CE Marking Directive)",
-      "description": "Product bears the CE mark, indicating conformity with applicable EU health, safety, and environmental protection legislation."
+      "description": "Product bears the CE mark, indicating conformity with applicable EU health, safety, and environmental protection legislation.",
+      "ExpiryDate": "2026-12-31"
     }
   ],
   "standards": [

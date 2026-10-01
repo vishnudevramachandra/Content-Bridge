@@ -13,6 +13,8 @@ reused (Strapi's admin JWT is short-lived-ish but plenty long for one CLI run).
 
 from __future__ import annotations
 
+import datetime
+
 import requests
 
 from contentbridge.utils.utils import get_env
@@ -238,3 +240,23 @@ class StrapiClient:
             return resp.json()["data"]
         except requests.HTTPError:
             return _strapi_error(resp, uid=uid, entry_id=entry_id)
+
+    def get_expired_certifications(self) -> list[dict]:
+        """Like `SELECT * FROM certifications WHERE ExpiryDate < CURRENT_DATE`
+        (with their related `products` populated via the default `populate:
+        "*"` in `query_entries`) — certifications whose `ExpiryDate` has
+        already passed as of today. Used by the periodic expiry check.
+
+        Raises `RuntimeError` on a Strapi-side error (e.g. a bad filter or
+        an auth problem) rather than silently returning an empty list —
+        callers checking "did anything expire?" must not confuse "the
+        query failed" with "nothing's expired".
+        """
+        today = datetime.date.today().isoformat()
+        result = self.query_entries(
+            "api::certification.certification",
+            params={"filters": {"ExpiryDate": {"$lt": today}}},
+        )
+        if "error" in result:
+            raise RuntimeError(f"Strapi query for expired certifications failed: {result}")
+        return result["results"]
