@@ -9,10 +9,16 @@ Architecture, in short:
 * `message_history` is kept for a single global conversation (this is a
   single-user dev backend, not a multi-tenant one) and passed into the
   next run so the orchestrator remembers earlier turns.
-* A periodic background task checks whether a run is currently active and,
-  if so, injects a "system alert" into it via `AgentRun.enqueue()` — the
-  orchestrator picks it up on its next model request. If no run is
-  active, the tick is simply skipped.
+* A periodic background task polls Strapi for certifications whose
+  `ExpiryDate` has passed. For each one not already alerted on: if a run
+  is active, the alert is injected into it via `AgentRun.enqueue()`
+  (picked up on the orchestrator's next model request); if the
+  conversation is idle (no active run, no pending question), the worker
+  starts a *new* orchestrator run itself, the same way `/api/chat` would,
+  just with no SSE client attached. Either way the certification is
+  marked alerted so it isn't repeated every tick — if a human is mid-
+  conversation answering a pending question, the tick is skipped instead
+  and retried later rather than lost or forced in.
 * The orchestrator's own `ask_user` tool is the only way its run ever
   pauses — both for its own direct questions and to relay a question
   from a paused sub-agent (see `orchestrator_agent._delegate` /
@@ -60,6 +66,7 @@ from contentbridge.agents.orchestrator.orchestrator_agent import (
     agent as orchestrator_agent,
 )
 from contentbridge.agents.orchestrator.pending import PendingSubAgentRun
+from contentbridge.utils.strapi_client import StrapiClient
 from contentbridge.utils.utils import get_env
 
 _PERIODIC_ALERT_INTERVAL_SECONDS = 5
@@ -80,10 +87,15 @@ class ChatState:
 
     This is a single global conversation (no per-user/session handling
     yet), which matches the original prototype. `active_run` is set for
-    the duration of one `/api/chat` request so the periodic background
-    task can inject into it. `pending_sub_agent_runs` and
-    `pending_orchestrator` track at most one outstanding human question
-    at a time — also consistent with there being a single conversation.
+    the duration of one `/api/chat` request (or an autonomous run started
+    by the periodic worker — see `_run_autonomous_alert`) so the periodic
+    background task can tell whether one is already in flight.
+    `pending_sub_agent_runs` and `pending_orchestrator` track at most one
+    outstanding human question at a time — also consistent with there
+    being a single conversation. `alerted_certification_ids` remembers
+    which expired certifications the periodic worker has already surfaced
+    (by Strapi `documentId`), so the same expiry doesn't re-trigger every
+    tick forever.
     """
 
     def __init__(self) -> None:
@@ -91,6 +103,7 @@ class ChatState:
         self.active_run: AgentRun[AgentDeps, str] | None = None
         self.pending_sub_agent_runs: dict[str, PendingSubAgentRun] = {}
         self.pending_orchestrator: PendingOrchestratorRun | None = None
+        self.alerted_certification_ids: set[str] = set()
 
 
 chat_state = ChatState()
@@ -243,29 +256,101 @@ def _sse_line(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload, default=str)}\n\n"
 
 
-async def _periodic_alert_worker() -> None:
-    """Every few seconds, inject a system alert into the active run, if any.
+def _format_expiry_alert(certifications: list[dict]) -> str:
+    """Build the alert text handed to the orchestrator for newly-expired
+    certifications.
 
-    Uses `priority="when_idle"` deliberately: the default `"asap"` priority
-    delivers at the *earliest* opportunity, which — for a run whose model
-    turn takes longer than the alert interval — aborts and restarts the
-    in-flight model request every tick, so the run never converges.
-    `"when_idle"` instead waits until the agent would otherwise end,
-    giving it one extra look at the alert without interrupting whatever
-    it's already doing.
+    Deliberately reports only each certification's own fields (name,
+    documentId, ExpiryDate) — not its linked products or anything else
+    pulled from the Strapi response. Which products are linked, which
+    WordPress posts those correspond to, and what (if anything) should
+    change there are all things the agents are equipped to work out
+    themselves (via run_sync_agent and the ontologies/Strapi/WordPress
+    tools), not something this plain orchestration code should be
+    pre-digesting or baking field-name assumptions about.
+    """
+    lines = ["SYSTEM ALERT: the following Strapi certifications have expired:"]
+    for cert in certifications:
+        lines.append(
+            f"- '{cert.get('name')}' (documentId={cert.get('documentId')}) "
+            f"expired on {cert.get('ExpiryDate')}."
+        )
+    lines.append(
+        "For each one, use run_sync_agent to find its linked product(s) in "
+        "Strapi, the corresponding WordPress post(s) via the ontologies, "
+        "and update them to reflect the expired certification."
+    )
+    return "\n".join(lines)
+
+
+async def _check_expired_certifications() -> list[dict]:
+    """Query Strapi for expired certifications off the event loop thread
+    (`StrapiClient` is `requests`-based, i.e. blocking) and report, rather
+    than raise, any failure — one bad tick (Strapi briefly unreachable,
+    rate-limited login, ...) shouldn't take down the periodic worker."""
+    try:
+        return await asyncio.to_thread(StrapiClient().get_expired_certifications)
+    except Exception as e:
+        console.log(f"[periodic check] failed to query Strapi for expired certifications: {e}")
+        return []
+
+
+async def _run_autonomous_alert(alert_text: str) -> None:
+    """Start a fresh orchestrator run triggered by the periodic worker
+    itself rather than a human request. Reuses `_stream_orchestrator_run`
+    — same state bookkeeping (`chat_state.active_run`/`message_history`/
+    `pending_orchestrator`) as `/api/chat` — just drained here with no SSE
+    client attached; the orchestrator's own tool-call console logging is
+    the visibility for this path. If it pauses on a question, it's
+    recorded in `chat_state.pending_orchestrator` exactly as if a human
+    had started it, answerable later via `/api/answer`.
+    """
+    async for _ in _stream_orchestrator_run(_build_deps(), user_prompt=alert_text):
+        pass
+
+
+async def _periodic_alert_worker() -> None:
+    """Every few seconds, check Strapi for newly-expired certifications and
+    alert the orchestrator about any that haven't been alerted on yet.
+
+    Uses `priority="when_idle"` for the enqueue-into-active-run path
+    deliberately: the default `"asap"` priority delivers at the *earliest*
+    opportunity, which — for a run whose model turn takes longer than the
+    alert interval — aborts and restarts the in-flight model request every
+    tick, so the run never converges. `"when_idle"` instead waits until the
+    agent would otherwise end, giving it one extra look at the alert
+    without interrupting whatever it's already doing.
     """
     while True:
         await asyncio.sleep(_PERIODIC_ALERT_INTERVAL_SECONDS)
 
-        active_run = chat_state.active_run
-        if active_run is None:
+        expired = await _check_expired_certifications()
+        new_expired = [
+            cert
+            for cert in expired
+            if cert["documentId"] not in chat_state.alerted_certification_ids
+        ]
+        if not new_expired:
             continue
 
-        active_run.enqueue(
-            "SYSTEM ALERT: periodic health check triggered. If this is "
-            "not relevant to the current task, ignore it and continue.",
-            priority="when_idle",
-        )
+        alert_text = _format_expiry_alert(new_expired)
+
+        active_run = chat_state.active_run
+        if active_run is not None:
+            active_run.enqueue(alert_text, priority="when_idle")
+            chat_state.alerted_certification_ids.update(
+                cert["documentId"] for cert in new_expired
+            )
+        elif chat_state.pending_orchestrator is None:
+            # Idle: no one's chatting and nothing's pending — start a run
+            # ourselves rather than waiting for a human to show up.
+            chat_state.alerted_certification_ids.update(
+                cert["documentId"] for cert in new_expired
+            )
+            asyncio.create_task(_run_autonomous_alert(alert_text))
+        # else: a human is mid-conversation answering a pending question.
+        # Leave these unmarked so they're retried next tick instead of
+        # being lost or forced into an unrelated exchange.
 
 
 @asynccontextmanager
@@ -295,6 +380,14 @@ async def chat(payload: UserPromptRequest) -> StreamingResponse:
         raise HTTPException(
             status_code=409,
             detail="A sub-agent question is pending; answer it via /api/answer first.",
+        )
+    if chat_state.active_run is not None:
+        # Guards against racing an autonomous run the periodic worker just
+        # started (see `_run_autonomous_alert`) — both would otherwise
+        # read/write the same `chat_state.message_history` concurrently.
+        raise HTTPException(
+            status_code=409,
+            detail="A run is already in progress; try again shortly.",
         )
 
     return StreamingResponse(
@@ -339,6 +432,7 @@ async def reset() -> dict[str, str]:
     chat_state.message_history = []
     chat_state.pending_orchestrator = None
     chat_state.pending_sub_agent_runs.clear()
+    chat_state.alerted_certification_ids.clear()
     return {"status": "reset"}
 
 
@@ -348,6 +442,7 @@ async def status() -> dict[str, object]:
         "run_active": chat_state.active_run is not None,
         "history_length": len(chat_state.message_history),
         "waiting_for_answer": chat_state.pending_orchestrator is not None,
+        "alerted_certifications": len(chat_state.alerted_certification_ids),
     }
 
 

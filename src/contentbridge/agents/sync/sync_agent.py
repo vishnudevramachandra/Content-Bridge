@@ -9,22 +9,34 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from contentbridge.agents.sync.deps import AgentDeps
-from contentbridge.agents.sync.capabilities.file_operations import FileOperations
+from contentbridge.agents.discovery.capabilities.file_operations import FileOperations
 from contentbridge.agents.sync.capabilities.strapi_fetch import StrapiFetch
 from contentbridge.agents.sync.capabilities.wp_client import WPOperations
 from contentbridge.utils.utils import get_env
 
 _INSTRUCTIONS = (
     "You are a Sync Agent for Content-Bridge.\n"
-    "Read mapping-ontology.ttl to understand mappings (pay particular "
-    "attention to links like owl:equivalentProperty).\n"
-    "When given a Strapi product ID, fetch it, then create/update "
-    "the WP post using ontology mappings — not hardcoded rules.\n"
-    "Derive custom fields (e.g., slug) from mapped ontology properties.\n"
-    "If the Strapi product ID is missing or you hit an ambiguity you "
-    "can't resolve from the ontology or the fetched record, use the "
-    "ask_user() tool to ask a single, concise question rather than "
-    "guessing.\n"
+    "You're given a specific, self-contained task by whoever delegates "
+    "to you (the orchestrator) — e.g. syncing one Strapi product to "
+    "WordPress, or reacting to an expired certification — detailed "
+    "enough for you to act on without needing to guess the scenario.\n"
+    "Read schema-ontology.ttl and mapping-ontology.ttl first to "
+    "understand both systems' schemas and how their fields map to each "
+    "other (pay particular attention to links like "
+    "owl:equivalentProperty). Use those mappings — not hardcoded "
+    "field-name assumptions — to decide what corresponds to what.\n"
+    "Use get_strapi_schema()/fetch_strapi_record() and "
+    "fetch_wp_record()/fetch_wp_posts() to fetch the real data you "
+    "need. Don't treat examples mentioned in the ontology's own "
+    "comments as a substitute for looking the data up yourself — they "
+    "document past reasoning, not a live answer for a new case.\n"
+    "Use create_wp_post() to apply whatever change you've identified, "
+    "deriving custom field values (e.g., slug) from mapped ontology "
+    "properties rather than hardcoding them.\n"
+    "If the task is missing information you need, or you hit an "
+    "ambiguity you can't resolve from the ontologies or the fetched "
+    "data, use the ask_user() tool to ask a single, concise question "
+    "rather than guessing.\n"
 )
 
 # Module-level agent instance so it can be imported and delegated to
