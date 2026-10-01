@@ -11,6 +11,14 @@ from contentbridge.utils.utils import get_env
 WORDPRESS_BASE_URL = f"http://localhost:{get_env('WORDPRESS_PORT')}"
 WORDPRESS_API = f"{WORDPRESS_BASE_URL}/wp-json/wp/v2"
 
+# WP's REST API requires auth for writes (creating/updating posts); reads
+# don't need it, which is why only `create_post`/`update_post` below pass
+# this. The login password in WP_ADMIN_PASSWORD can't be used directly for
+# REST auth — this is a separate WP Application Password (see
+# docker-compose.yml's WP_ENVIRONMENT_TYPE comment for why those even work
+# here, over plain HTTP).
+_WP_ADMIN_AUTH = (get_env("WP_ADMIN_USER"), get_env("WP_ADMIN_APP_PASSWORD"))
+
 
 def _wp_error(resp: requests.Response, **extra: object) -> dict:
     """Build a structured error dict from a failed WP REST response, shared
@@ -71,6 +79,48 @@ class WPClient:
         """Fetch a single WP post by ID; return a structured error dict
         (see `_wp_error`) on any HTTP error, e.g. an unknown post_id."""
         resp = requests.get(f"{WORDPRESS_API}/posts/{post_id}", timeout=10)
+        try:
+            resp.raise_for_status()
+            return resp.json()
+        except requests.HTTPError:
+            return _wp_error(resp, post_id=post_id)
+
+    def create_post(self, title: str, content: str, meta: dict | None = None) -> dict:
+        """Create a new WP post; return a structured error dict (see
+        `_wp_error`) on any HTTP error, e.g. missing required fields."""
+        payload: dict = {"title": title, "content": content}
+        if meta is not None:
+            payload["meta"] = meta
+        resp = requests.post(f"{WORDPRESS_API}/posts", json=payload, auth=_WP_ADMIN_AUTH, timeout=10)
+        try:
+            resp.raise_for_status()
+            return resp.json()
+        except requests.HTTPError:
+            return _wp_error(resp)
+
+    def update_post(
+        self,
+        post_id: int,
+        *,
+        title: str | None = None,
+        content: str | None = None,
+        meta: dict | None = None,
+    ) -> dict:
+        """Partially update an existing WP post — only the fields passed
+        (non-`None`) are sent, so e.g. `update_post(14, content="...")`
+        changes the post's content and leaves its title/meta untouched.
+        Returns a structured error dict (see `_wp_error`) on any HTTP
+        error, e.g. an unknown post_id."""
+        payload: dict = {}
+        if title is not None:
+            payload["title"] = title
+        if content is not None:
+            payload["content"] = content
+        if meta is not None:
+            payload["meta"] = meta
+        resp = requests.post(
+            f"{WORDPRESS_API}/posts/{post_id}", json=payload, auth=_WP_ADMIN_AUTH, timeout=10
+        )
         try:
             resp.raise_for_status()
             return resp.json()

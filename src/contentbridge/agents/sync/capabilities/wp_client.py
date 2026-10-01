@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Any
 
-import requests
 from pydantic_ai import RunContext
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import ToolCallPart
@@ -9,7 +8,7 @@ from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import FunctionToolset
 
 from contentbridge.agents.sync.deps import AgentDeps
-from contentbridge.utils.wp_client import WORDPRESS_API, WPClient
+from contentbridge.utils.wp_client import WPClient
 
 
 def fetch_wp_record(post_id: int) -> dict:
@@ -57,7 +56,7 @@ def fetch_wp_posts(page: int = 1, per_page: int = 10) -> list[dict] | dict:
     return WPClient().get_posts(page=page, per_page=per_page)
 
 
-def create_wp_post(title: str, content: str, meta: dict) -> dict:
+def create_wp_post(title: str, content: str, meta: dict | None = None) -> dict:
     """Create a new WordPress post.
 
     Parameters
@@ -66,21 +65,48 @@ def create_wp_post(title: str, content: str, meta: dict) -> dict:
         The post title.
     content : str
         The post content (HTML/plain text, per WP's own handling).
-    meta : dict
+    meta : dict, optional
         Custom field values to set on the new post.
 
     Returns
     -------
     dict
-        The created post record.
+        The created post record on success. On failure, an error dict
+        (see `fetch_wp_record`'s return shape).
     """
-    resp = requests.post(
-        f"{WORDPRESS_API}/posts",
-        json={"title": title, "content": content, "meta": meta},
-        timeout=10,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    return WPClient().create_post(title, content, meta=meta)
+
+
+def update_wp_post(
+    post_id: int,
+    title: str | None = None,
+    content: str | None = None,
+    meta: dict | None = None,
+) -> dict:
+    """Partially update an existing WordPress post — only whichever of
+    `title`/`content`/`meta` you pass is changed; anything left as `None`
+    is untouched.
+
+    Parameters
+    ----------
+    post_id : int
+        The WordPress post ID to update.
+    title : str, optional
+        New post title.
+    content : str, optional
+        New post content, replacing the post's current content in full
+        — fetch the current content first (`fetch_wp_record`) if the
+        change is to part of it rather than a full rewrite.
+    meta : dict, optional
+        Custom field values to set/change on the post.
+
+    Returns
+    -------
+    dict
+        The updated post record on success. On failure, an error dict
+        (see `fetch_wp_record`'s return shape).
+    """
+    return WPClient().update_post(post_id, title=title, content=content, meta=meta)
 
 
 @dataclass
@@ -90,6 +116,7 @@ class WPOperations(AbstractCapability[Any]):
         ts.add_function(fetch_wp_record)
         ts.add_function(fetch_wp_posts)
         ts.add_function(create_wp_post)
+        ts.add_function(update_wp_post)
         return ts
 
     async def before_tool_execute(
@@ -106,5 +133,7 @@ class WPOperations(AbstractCapability[Any]):
             ctx.deps.console.log(f"Fetching WP posts: {args}")
         elif call.tool_name == "create_wp_post":
             ctx.deps.console.log(f"Creating WP post: {args}")
+        elif call.tool_name == "update_wp_post":
+            ctx.deps.console.log(f"Updating WP post: {args}")
 
         return args

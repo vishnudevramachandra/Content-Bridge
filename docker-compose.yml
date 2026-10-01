@@ -37,6 +37,14 @@ services:
       WP_ADMIN_USER: ${WP_ADMIN_USER}
       WP_ADMIN_PASSWORD: ${WP_ADMIN_PASSWORD}
       WP_ADMIN_EMAIL: ${WP_ADMIN_EMAIL}
+      # WordPress core only allows Application Passwords (what sync_agent's
+      # WP write calls authenticate with) over SSL, or when the site
+      # self-identifies as a 'local' environment (wp_get_environment_type(),
+      # read via getenv() when this constant isn't defined in wp-config.php).
+      # This stack genuinely is local/dev, running over plain HTTP, so this
+      # is what actually enables Application Passwords here — not a
+      # workaround.
+      WP_ENVIRONMENT_TYPE: local
     volumes:
       - wordpress_data:/var/www/html
       # Bind-mount our own plugin from the repo so it's live-edited on the host,
