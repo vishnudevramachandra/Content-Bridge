@@ -36,10 +36,12 @@ import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from rich.console import Console
@@ -66,10 +68,13 @@ from contentbridge.agents.orchestrator.orchestrator_agent import (
     agent as orchestrator_agent,
 )
 from contentbridge.agents.orchestrator.pending import PendingSubAgentRun
+from contentbridge.utils.ontology import parse_mapping_ontology, parse_schema_ontology
 from contentbridge.utils.strapi_client import StrapiClient
+from contentbridge.utils.sync_log import read_entries
 from contentbridge.utils.utils import get_env
 
 _PERIODIC_ALERT_INTERVAL_SECONDS = 5
+_SANDBOX_DIR = Path("sandbox")
 
 
 @dataclass
@@ -366,6 +371,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 app = FastAPI(title="Content-Bridge Backend", lifespan=lifespan)
 
+# Dev-only: lets the Vite dev server (a different origin) call these
+# APIs directly. Fine for this single-user local tool; would need
+# tightening (explicit origin allowlist, no "*") before this is ever
+# exposed beyond localhost.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.post("/api/chat")
 async def chat(payload: UserPromptRequest) -> StreamingResponse:
@@ -438,12 +454,61 @@ async def reset() -> dict[str, str]:
 
 @app.get("/api/status")
 async def status() -> dict[str, object]:
+    pending = chat_state.pending_orchestrator
+    pending_question = None
+    if pending is not None:
+        call = pending.requests.calls[0]
+        pending_question = pending.requests.metadata.get(call.tool_call_id, {}).get(
+            "question"
+        )
+
     return {
         "run_active": chat_state.active_run is not None,
         "history_length": len(chat_state.message_history),
-        "waiting_for_answer": chat_state.pending_orchestrator is not None,
+        "waiting_for_answer": pending is not None,
+        # The question text itself, so a freshly-loaded/reloaded frontend
+        # can show what's pending (e.g. after the periodic worker started
+        # an autonomous run) rather than just a boolean with nothing to
+        # answer against.
+        "pending_question": pending_question,
         "alerted_certifications": len(chat_state.alerted_certification_ids),
     }
+
+
+@app.get("/api/schema")
+async def get_schema() -> dict[str, object]:
+    """Discovery's schema-ontology.ttl, parsed into per-system JSON.
+
+    `available=False` (with empty classes) if Discovery hasn't run yet.
+    """
+    path = _SANDBOX_DIR / "schema-ontology.ttl"
+    if not path.exists():
+        return {
+            "available": False,
+            "wordpress": {"classes": []},
+            "strapi": {"classes": []},
+        }
+    data = await asyncio.to_thread(parse_schema_ontology, path)
+    return {"available": True, **data}
+
+
+@app.get("/api/mappings")
+async def get_mappings() -> dict[str, object]:
+    """Mapping's mapping-ontology.ttl (SSSOM), parsed into a mapping list.
+
+    `available=False` (with an empty list) if Mapping hasn't run yet.
+    """
+    path = _SANDBOX_DIR / "mapping-ontology.ttl"
+    if not path.exists():
+        return {"available": False, "mappings": []}
+    mappings = await asyncio.to_thread(parse_mapping_ontology, path)
+    return {"available": True, "mappings": mappings}
+
+
+@app.get("/api/sync-log")
+async def get_sync_log(limit: int = 50, offset: int = 0) -> dict[str, object]:
+    """Recorded WordPress writes the Sync agent has made, newest first."""
+    return {"entries": read_entries(limit=limit, offset=offset)}
 
 
 def main() -> None:

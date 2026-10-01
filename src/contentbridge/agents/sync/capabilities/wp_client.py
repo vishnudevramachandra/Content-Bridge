@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -8,7 +9,10 @@ from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import FunctionToolset
 
 from contentbridge.agents.sync.deps import AgentDeps
+from contentbridge.utils.sync_log import SyncLogEntry, append_entry
 from contentbridge.utils.wp_client import WPClient
+
+_LOGGED_TOOLS = {"create_wp_post", "update_wp_post"}
 
 
 def fetch_wp_record(post_id: int) -> dict:
@@ -142,3 +146,25 @@ class WPOperations(AbstractCapability[Any]):
             ctx.deps.console.log(f"Updating WP post: {args}")
 
         return args
+
+    async def after_tool_execute(
+        self,
+        ctx: RunContext[AgentDeps],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: dict[str, Any],
+        result: Any,
+    ) -> Any:
+        if call.tool_name in _LOGGED_TOOLS and isinstance(result, dict):
+            append_entry(
+                SyncLogEntry(
+                    timestamp=time.time(),
+                    tool_name=call.tool_name,
+                    args=args,
+                    result=result,
+                    success="error" not in result,
+                )
+            )
+
+        return result

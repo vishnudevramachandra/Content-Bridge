@@ -39,3 +39,9 @@ logs/
 
 # --- Mapping rules database ---
 mapping_rules.db
+
+# --- Sync log (app-level audit data, not agent-authored content) ---
+/data/
+
+# --- Frontend build output ---
+frontend/dist/
