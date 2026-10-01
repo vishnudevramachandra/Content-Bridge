@@ -96,7 +96,12 @@ def update_wp_post(
     content : str, optional
         New post content, replacing the post's current content in full
         — fetch the current content first (`fetch_wp_record`) if the
-        change is to part of it rather than a full rewrite.
+        change is to part of it rather than a full rewrite. If the
+        fetched content ends in a stray empty paragraph (`<p></p>`) and
+        you're keeping/adding real paragraphs before it, drop that empty
+        one from what you send back — WP's rendering (`wpautop`) has
+        been observed to mangle the output (a stray extra `</p>`) when
+        an empty trailing paragraph follows more than one real one.
     meta : dict, optional
         Custom field values to set/change on the post.
 
